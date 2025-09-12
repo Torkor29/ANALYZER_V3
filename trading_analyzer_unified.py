@@ -11,6 +11,7 @@ import math
 from openpyxl import Workbook
 from openpyxl.utils.dataframe import dataframe_to_rows
 from openpyxl.chart import LineChart, Reference, PieChart, BarChart
+from openpyxl.chart.label import DataLabelList
 from datetime import datetime
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
@@ -868,6 +869,171 @@ class TradingAnalyzer:
         stats["trades_neutres_complets"] = trades_neutres
         
         return stats
+
+    def calculer_agregations_graphes(self, df: pd.DataFrame):
+        """Calcule les agrégations nécessaires pour les graphiques demandés.
+
+        - Horaires d'ouverture majoritaires (IN)
+        - Horaires de fermeture majoritaires (dernier OUT par trade)
+        - Heures/Jours/Mois: profits totaux survenus (sur les OUT)
+        - Comptes TP/SL par heure/jour/mois (TP=profit total du trade >0, SL<0, au dernier OUT)
+        - Évolution cumulée du profit (linéaire) au moment du dernier OUT de chaque trade
+        - Durée moyenne/médiane des trades (IN -> dernier OUT)
+        """
+        result = {}
+
+        if "Heure d'ouverture" not in df.columns or "Direction" not in df.columns:
+            return result
+
+        # Normaliser la date
+        df = df.copy()
+        df["Datetime"] = pd.to_datetime(df["Heure d'ouverture"], errors='coerce')
+        df = df[df["Datetime"].notna()]
+
+        # Préparer tables IN et OUT
+        df_in = df[df["Direction"] == "in"].copy()
+        df_out = df[df["Direction"] == "out"].copy()
+
+        # 1) Horaires d'ouvertures (IN)
+        heures_index = pd.Index(range(24), name="Heure")
+        if len(df_in) > 0:
+            heures_in = df_in["Datetime"].dt.hour.value_counts().sort_index()
+            heures_in = heures_in.reindex(heures_index, fill_value=0)
+        else:
+            heures_in = pd.Series(0, index=heures_index, dtype=int)
+        result["heures_in_counts"] = heures_in
+
+        # 2) Dernier OUT par trade (fermeture)
+        heures_out_dernier = pd.Series(0, index=heures_index, dtype=int)
+        if len(df_out) > 0 and "Cle_Match" in df_out.columns:
+            # Dernier OUT par Cle_Match
+            idx_last_out = df_out.sort_values(["Cle_Match", "Datetime"]).groupby("Cle_Match").tail(1)
+            heures_out_dernier = idx_last_out["Datetime"].dt.hour.value_counts().sort_index()
+            heures_out_dernier = heures_out_dernier.reindex(heures_index, fill_value=0)
+        result["heures_out_counts"] = heures_out_dernier
+
+        # 3) Profits par heure/jour/mois (OUT uniquement)
+        jours_index = pd.Index(range(7), name="Jour")
+        mois_index = pd.Index(range(1, 13), name="Mois")
+        if len(df_out) > 0:
+            profits_par_heure = df_out.groupby(df_out["Datetime"].dt.hour)["Profit"].sum().sort_index().reindex(heures_index, fill_value=0.0)
+            profits_par_jour = df_out.groupby(df_out["Datetime"].dt.dayofweek)["Profit"].sum().sort_index().reindex(jours_index, fill_value=0.0)
+            profits_par_mois = df_out.groupby(df_out["Datetime"].dt.month)["Profit"].sum().sort_index().reindex(mois_index, fill_value=0.0)
+        else:
+            profits_par_heure = pd.Series(0.0, index=heures_index, dtype=float)
+            profits_par_jour = pd.Series(0.0, index=jours_index, dtype=float)
+            profits_par_mois = pd.Series(0.0, index=mois_index, dtype=float)
+
+        result["profits_par_heure_out"] = profits_par_heure
+        result["profits_par_jour_out"] = profits_par_jour
+        result["profits_par_mois_out"] = profits_par_mois
+
+        # Identifier best/worst heures/jours/mois
+        def _best_worst(series):
+            if series is None or len(series) == 0:
+                return None, None
+            best_idx = series.idxmax()
+            worst_idx = series.idxmin()
+            return int(best_idx), int(worst_idx)
+
+        result["best_hour"], result["worst_hour"] = _best_worst(profits_par_heure)
+        result["best_day"], result["worst_day"] = _best_worst(profits_par_jour)
+        result["best_month"], result["worst_month"] = _best_worst(profits_par_mois)
+
+        # 3bis) Comptes TP/SL par heure/jour/mois basés sur le dernier OUT et le profit total du trade
+        tpsl_by_hour = pd.Series(0, index=heures_index, dtype=int)
+        sl_by_hour = pd.Series(0, index=heures_index, dtype=int)
+        tpsl_by_day = pd.Series(0, index=jours_index, dtype=int)
+        sl_by_day = pd.Series(0, index=jours_index, dtype=int)
+        tpsl_by_month = pd.Series(0, index=mois_index, dtype=int)
+        sl_by_month = pd.Series(0, index=mois_index, dtype=int)
+        if len(df_out) > 0 and "Cle_Match" in df_out.columns:
+            trade_profit = df.groupby("Cle_Match")["Profit"].sum().reset_index()
+            last_out = df_out.sort_values(["Cle_Match", "Datetime"]).groupby("Cle_Match").tail(1)[["Cle_Match", "Datetime"]]
+            trades_final = trade_profit.merge(last_out, on="Cle_Match", how="inner")
+            trades_final["hour"] = trades_final["Datetime"].dt.hour
+            trades_final["day"] = trades_final["Datetime"].dt.dayofweek
+            trades_final["month"] = trades_final["Datetime"].dt.month
+            tps = trades_final[trades_final["Profit"] > 0]
+            sls = trades_final[trades_final["Profit"] < 0]
+            tpsl_by_hour = tps.groupby("hour").size().reindex(heures_index, fill_value=0)
+            sl_by_hour = sls.groupby("hour").size().reindex(heures_index, fill_value=0)
+            tpsl_by_day = tps.groupby("day").size().reindex(jours_index, fill_value=0)
+            sl_by_day = sls.groupby("day").size().reindex(jours_index, fill_value=0)
+            tpsl_by_month = tps.groupby("month").size().reindex(mois_index, fill_value=0)
+            sl_by_month = sls.groupby("month").size().reindex(mois_index, fill_value=0)
+        result["tp_par_heure"] = tpsl_by_hour
+        result["sl_par_heure"] = sl_by_hour
+        result["tp_par_jour"] = tpsl_by_day
+        result["sl_par_jour"] = sl_by_day
+        result["tp_par_mois"] = tpsl_by_month
+        result["sl_par_mois"] = sl_by_month
+
+        # 4) Évolution cumulée (linéaire) des profits par trade au moment du dernier OUT
+        cumul_df = pd.DataFrame(columns=["Datetime", "Profit_Trade", "Cumul_Profit"]) 
+        if "Cle_Match" in df.columns and len(df_out) > 0:
+            trades_sum = df.groupby("Cle_Match")["Profit"].sum().reset_index()
+            last_out = df_out.sort_values(["Cle_Match", "Datetime"]).groupby("Cle_Match").tail(1)[["Cle_Match", "Datetime"]]
+            series_trades = trades_sum.merge(last_out, on="Cle_Match", how="inner").dropna(subset=["Datetime"]) 
+            series_trades = series_trades.sort_values("Datetime")
+            series_trades["Cumul_Profit"] = series_trades["Profit"].cumsum()
+            cumul_df = series_trades.rename(columns={"Profit": "Profit_Trade"})[["Datetime", "Profit_Trade", "Cumul_Profit"]]
+        result["cumul_evolution"] = cumul_df
+
+        # 5) Durée moyenne/médiane des trades (IN -> dernier OUT)
+        duree_moyenne_minutes = None
+        duree_mediane_minutes = None
+        if "Cle_Match" in df.columns and len(df_in) > 0 and len(df_out) > 0:
+            first_in = df_in.sort_values(["Cle_Match", "Datetime"]).groupby("Cle_Match").head(1)[["Cle_Match", "Datetime"]].rename(columns={"Datetime": "InTime"})
+            last_out = df_out.sort_values(["Cle_Match", "Datetime"]).groupby("Cle_Match").tail(1)[["Cle_Match", "Datetime"]].rename(columns={"Datetime": "OutTime"})
+            joined = first_in.merge(last_out, on="Cle_Match", how="inner")
+            if len(joined) > 0:
+                durees = (joined["OutTime"] - joined["InTime"]).dt.total_seconds() / 60.0
+                duree_moyenne_minutes = float(durees.mean())
+                duree_mediane_minutes = float(durees.median())
+        result["duree_moyenne_minutes"] = duree_moyenne_minutes
+        result["duree_mediane_minutes"] = duree_mediane_minutes
+
+        # Préparer les données d'évolution pour le web
+        evolution_somme_cumulee = []
+        print(f"[DEBUG] Colonnes disponibles pour evolution_somme_cumulee: {list(df.columns)}")
+        
+        # Chercher les colonnes de date et solde avec différentes variantes
+        date_col = None
+        solde_col = None
+        
+        for col in df.columns:
+            if col.lower() in ['datetime', 'date', 'timestamp']:
+                date_col = col
+            elif col.lower() in ['solde_cumule', 'solde_cumulé', 'solde_cumulee', 'cumul', 'balance']:
+                solde_col = col
+        
+        print(f"[DEBUG] Colonne date trouvée: {date_col}, Colonne solde trouvée: {solde_col}")
+        
+        if date_col and solde_col:
+            for _, row in df.iterrows():
+                try:
+                    date_val = row[date_col]
+                    solde_val = row[solde_col]
+                    
+                    # Convertir la date en format ISO si possible
+                    if hasattr(date_val, 'isoformat'):
+                        date_str = date_val.isoformat()
+                    else:
+                        date_str = str(date_val)
+                    
+                    evolution_somme_cumulee.append({
+                        'date': date_str,
+                        'solde': float(round(float(solde_val), 2))
+                    })
+                except Exception as e:
+                    print(f"[WARNING] Erreur lors du traitement de la ligne: {e}")
+                    continue
+        
+        print(f"[DEBUG] Nombre de points d'évolution créés: {len(evolution_somme_cumulee)}")
+        result["evolution_somme_cumulee"] = evolution_somme_cumulee
+
+        return result
     
     def create_excel_report(self, df_final, reports_folder, timestamp, filter_type=None):
         """Crée un rapport Excel complet avec graphiques"""
@@ -987,6 +1153,279 @@ class TradingAnalyzer:
                 ws_resume[f'B{row_idx}'].alignment = Alignment(horizontal="right")
             
             print(f"[DEBUG] Summary sheet created with {len(stats_data)} rows")
+
+            # === AGRÉGATIONS POUR GRAPHIQUES (placer dans une feuille dédiée) ===
+            aggs = self.calculer_agregations_graphes(df_final)
+            ws_charts = wb.create_sheet("📈 Graphiques Résumé")
+
+            # === SECTION 1: DURÉE MOYENNE ===
+            duree_m = aggs.get("duree_moyenne_minutes")
+            duree_med = aggs.get("duree_mediane_minutes")
+            ws_charts['A1'] = "⏱️ TEMPS MOYEN DES TRADES"
+            ws_charts['A1'].font = Font(bold=True, color="366092", size=14)
+            ws_charts['A2'] = "Temps moyen (IN -> dernier OUT):"
+            ws_charts['A2'].font = Font(bold=True)
+            if duree_m is not None:
+                heures = int(duree_m // 60)
+                minutes = int(duree_m % 60)
+                ws_charts['B2'] = f"{heures}h {minutes}m ({duree_m:.1f} minutes)"
+            if duree_med is not None:
+                ws_charts['A3'] = "Temps médian:"
+                ws_charts['A3'].font = Font(bold=True)
+                heures_med = int(duree_med // 60)
+                minutes_med = int(duree_med % 60)
+                ws_charts['B3'] = f"{heures_med}h {minutes_med}m ({duree_med:.1f} minutes)"
+
+            # === SECTION 2: RÉPARTITION DES OUVERTURES (IN) ===
+            ws_charts['A8'] = "📊 RÉPARTITION DES OUVERTURES (IN) PAR HEURE"
+            ws_charts['A8'].font = Font(bold=True, color="366092", size=14)
+            ws_charts['A10'] = "Heure"
+            ws_charts['B10'] = "IN (comptage)"
+            heures = list(range(24))
+            row_ptr = 11
+            heures_in_series = aggs.get("heures_in_counts", pd.Series(dtype=int))
+            for h in heures:
+                ws_charts.cell(row=row_ptr, column=1, value=h)
+                ws_charts.cell(row=row_ptr, column=2, value=int(heures_in_series.get(h, 0)))
+                row_ptr += 1
+
+            chart_in = BarChart()
+            chart_in.title = "Répartition des ouvertures (IN) par heure"
+            chart_in.y_axis.title = "Comptage"
+            chart_in.x_axis.title = "Heure (0-23)"
+            data_in = Reference(ws_charts, min_col=2, min_row=10, max_row=row_ptr-1)
+            cats_in = Reference(ws_charts, min_col=1, min_row=11, max_row=row_ptr-1)
+            chart_in.add_data(data_in, titles_from_data=True)
+            chart_in.set_categories(cats_in)
+            chart_in.legend.position = 'b'
+            chart_in.height = 12
+            chart_in.width = 25
+            ws_charts.add_chart(chart_in, "E8")
+
+            # === SECTION 3: RÉPARTITION DES FERMETURES (OUT) ===
+            ws_charts['A40'] = "📊 RÉPARTITION DES FERMETURES (OUT) PAR HEURE"
+            ws_charts['A40'].font = Font(bold=True, color="366092", size=14)
+            ws_charts['A42'] = "Heure"
+            ws_charts['B42'] = "OUT dernier (comptage)"
+            row_ptr2 = 43
+            heures_out_series = aggs.get("heures_out_counts", pd.Series(dtype=int))
+            for h in heures:
+                ws_charts.cell(row=row_ptr2, column=1, value=h)
+                ws_charts.cell(row=row_ptr2, column=2, value=int(heures_out_series.get(h, 0)))
+                row_ptr2 += 1
+
+            chart_out = BarChart()
+            chart_out.title = "Répartition des fermetures (dernier OUT) par heure"
+            chart_out.y_axis.title = "Comptage"
+            chart_out.x_axis.title = "Heure (0-23)"
+            data_out = Reference(ws_charts, min_col=2, min_row=42, max_row=row_ptr2-1)
+            cats_out = Reference(ws_charts, min_col=1, min_row=43, max_row=row_ptr2-1)
+            chart_out.add_data(data_out, titles_from_data=True)
+            chart_out.set_categories(cats_out)
+            chart_out.legend.position = 'b'
+            chart_out.height = 12
+            chart_out.width = 25
+            ws_charts.add_chart(chart_out, "E40")
+
+            # === SECTION 4: PROFITS PAR HEURE ===
+            ws_charts['A72'] = "💰 PROFITS PAR HEURE (OUT)"
+            ws_charts['A72'].font = Font(bold=True, color="366092", size=14)
+            ws_charts['A74'] = "Heure"
+            ws_charts['B74'] = "Profit (€)"
+            row_ptr3 = 75
+            profits_par_heure = aggs.get("profits_par_heure_out", pd.Series(dtype=float))
+            for h in heures:
+                ws_charts.cell(row=row_ptr3, column=1, value=h)
+                ws_charts.cell(row=row_ptr3, column=2, value=float(round(profits_par_heure.get(h, 0.0), 2)))
+                row_ptr3 += 1
+            chart_ph = BarChart()
+            chart_ph.title = "Profits par heure (OUT)"
+            chart_ph.y_axis.title = "Profit (€)"
+            chart_ph.x_axis.title = "Heure (0-23)"
+            data = Reference(ws_charts, min_col=2, min_row=74, max_row=row_ptr3-1)
+            cats = Reference(ws_charts, min_col=1, min_row=75, max_row=row_ptr3-1)
+            chart_ph.add_data(data, titles_from_data=True)
+            chart_ph.set_categories(cats)
+            chart_ph.legend.position = 'b'
+            chart_ph.height = 12
+            chart_ph.width = 25
+            ws_charts.add_chart(chart_ph, "E72")
+
+            # === SECTION 5: PROFITS PAR JOUR ===
+            ws_charts['A104'] = "💰 PROFITS PAR JOUR (OUT)"
+            ws_charts['A104'].font = Font(bold=True, color="366092", size=14)
+            ws_charts['A106'] = "Jour"
+            ws_charts['B106'] = "Profit (€)"
+            row_ptr4 = 107
+            profits_par_jour = aggs.get("profits_par_jour_out", pd.Series(dtype=float))
+            jours_noms = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim']
+            for d in range(7):
+                ws_charts.cell(row=row_ptr4, column=1, value=jours_noms[d])
+                ws_charts.cell(row=row_ptr4, column=2, value=float(round(profits_par_jour.get(d, 0.0), 2)))
+                row_ptr4 += 1
+            chart_pj = BarChart()
+            chart_pj.title = "Profits par jour (OUT)"
+            chart_pj.y_axis.title = "Profit (€)"
+            chart_pj.x_axis.title = "Jour de la semaine"
+            data = Reference(ws_charts, min_col=2, min_row=106, max_row=row_ptr4-1)
+            cats = Reference(ws_charts, min_col=1, min_row=107, max_row=row_ptr4-1)
+            chart_pj.add_data(data, titles_from_data=True)
+            chart_pj.set_categories(cats)
+            chart_pj.legend.position = 'b'
+            chart_pj.height = 12
+            chart_pj.width = 20
+            ws_charts.add_chart(chart_pj, "E104")
+
+            # === SECTION 6: PROFITS PAR MOIS ===
+            ws_charts['A120'] = "💰 PROFITS PAR MOIS (OUT)"
+            ws_charts['A120'].font = Font(bold=True, color="366092", size=14)
+            ws_charts['A122'] = "Mois"
+            ws_charts['B122'] = "Profit (€)"
+            row_ptr5 = 123
+            profits_par_mois = aggs.get("profits_par_mois_out", pd.Series(dtype=float))
+            mois_noms = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Juin', 'Juil', 'Aoû', 'Sep', 'Oct', 'Nov', 'Déc']
+            for m in range(1, 13):
+                ws_charts.cell(row=row_ptr5, column=1, value=mois_noms[m-1])
+                ws_charts.cell(row=row_ptr5, column=2, value=float(round(profits_par_mois.get(m, 0.0), 2)))
+                row_ptr5 += 1
+            chart_pm = BarChart()
+            chart_pm.title = "Profits par mois (OUT)"
+            chart_pm.y_axis.title = "Profit (€)"
+            chart_pm.x_axis.title = "Mois de l'année"
+            data = Reference(ws_charts, min_col=2, min_row=122, max_row=row_ptr5-1)
+            cats = Reference(ws_charts, min_col=1, min_row=123, max_row=row_ptr5-1)
+            chart_pm.add_data(data, titles_from_data=True)
+            chart_pm.set_categories(cats)
+            chart_pm.legend.position = 'b'
+            chart_pm.height = 12
+            chart_pm.width = 25
+            ws_charts.add_chart(chart_pm, "E120")
+
+            # === SECTION 7: TP/SL PAR HEURE ===
+            ws_charts['A150'] = "🎯 NOMBRE DE TP/SL PAR HEURE"
+            ws_charts['A150'].font = Font(bold=True, color="366092", size=14)
+            ws_charts['A152'] = "Heure"
+            ws_charts['B152'] = "TP (nb)"
+            ws_charts['C152'] = "SL (nb)"
+            row_ptr6 = 153
+            tp_h = aggs.get('tp_par_heure', pd.Series(dtype=int))
+            sl_h = aggs.get('sl_par_heure', pd.Series(dtype=int))
+            for h in range(24):
+                ws_charts.cell(row=row_ptr6, column=1, value=h)
+                ws_charts.cell(row=row_ptr6, column=2, value=int(tp_h.get(h, 0)))
+                ws_charts.cell(row=row_ptr6, column=3, value=int(sl_h.get(h, 0)))
+                row_ptr6 += 1
+            chart_tpsl_h = BarChart()
+            chart_tpsl_h.title = "Nombre de TP/SL par heure (au dernier OUT)"
+            chart_tpsl_h.y_axis.title = "Nombre"
+            chart_tpsl_h.x_axis.title = "Heure (0-23)"
+            data = Reference(ws_charts, min_col=2, min_row=152, max_col=3, max_row=row_ptr6-1)
+            cats = Reference(ws_charts, min_col=1, min_row=153, max_row=row_ptr6-1)
+            chart_tpsl_h.add_data(data, titles_from_data=True)
+            chart_tpsl_h.set_categories(cats)
+            chart_tpsl_h.legend.position = 'b'
+            chart_tpsl_h.height = 12
+            chart_tpsl_h.width = 25
+            ws_charts.add_chart(chart_tpsl_h, "E150")
+
+            # === SECTION 8: TP/SL PAR JOUR ===
+            ws_charts['A185'] = "🎯 NOMBRE DE TP/SL PAR JOUR"
+            ws_charts['A185'].font = Font(bold=True, color="366092", size=14)
+            ws_charts['A187'] = "Jour"
+            ws_charts['B187'] = "TP (nb)"
+            ws_charts['C187'] = "SL (nb)"
+            row_ptr7 = 188
+            tp_d = aggs.get('tp_par_jour', pd.Series(dtype=int))
+            sl_d = aggs.get('sl_par_jour', pd.Series(dtype=int))
+            for d in range(7):
+                ws_charts.cell(row=row_ptr7, column=1, value=jours_noms[d])
+                ws_charts.cell(row=row_ptr7, column=2, value=int(tp_d.get(d, 0)))
+                ws_charts.cell(row=row_ptr7, column=3, value=int(sl_d.get(d, 0)))
+                row_ptr7 += 1
+            chart_tpsl_d = BarChart()
+            chart_tpsl_d.title = "Nombre de TP/SL par jour"
+            chart_tpsl_d.y_axis.title = "Nombre"
+            chart_tpsl_d.x_axis.title = "Jour de la semaine"
+            data = Reference(ws_charts, min_col=2, min_row=187, max_col=3, max_row=row_ptr7-1)
+            cats = Reference(ws_charts, min_col=1, min_row=188, max_row=row_ptr7-1)
+            chart_tpsl_d.add_data(data, titles_from_data=True)
+            chart_tpsl_d.set_categories(cats)
+            chart_tpsl_d.legend.position = 'b'
+            chart_tpsl_d.height = 12
+            chart_tpsl_d.width = 20
+            ws_charts.add_chart(chart_tpsl_d, "E185")
+
+            # === SECTION 9: TP/SL PAR MOIS ===
+            ws_charts['A200'] = "🎯 NOMBRE DE TP/SL PAR MOIS"
+            ws_charts['A200'].font = Font(bold=True, color="366092", size=14)
+            ws_charts['A202'] = "Mois"
+            ws_charts['B202'] = "TP (nb)"
+            ws_charts['C202'] = "SL (nb)"
+            row_ptr8 = 203
+            tp_m = aggs.get('tp_par_mois', pd.Series(dtype=int))
+            sl_m = aggs.get('sl_par_mois', pd.Series(dtype=int))
+            for m in range(1, 13):
+                ws_charts.cell(row=row_ptr8, column=1, value=mois_noms[m-1])
+                ws_charts.cell(row=row_ptr8, column=2, value=int(tp_m.get(m, 0)))
+                ws_charts.cell(row=row_ptr8, column=3, value=int(sl_m.get(m, 0)))
+                row_ptr8 += 1
+            chart_tpsl_m = BarChart()
+            chart_tpsl_m.title = "Nombre de TP/SL par mois"
+            chart_tpsl_m.y_axis.title = "Nombre"
+            chart_tpsl_m.x_axis.title = "Mois de l'année"
+            data = Reference(ws_charts, min_col=2, min_row=202, max_col=3, max_row=row_ptr8-1)
+            cats = Reference(ws_charts, min_col=1, min_row=203, max_row=row_ptr8-1)
+            chart_tpsl_m.add_data(data, titles_from_data=True)
+            chart_tpsl_m.set_categories(cats)
+            chart_tpsl_m.legend.position = 'b'
+            chart_tpsl_m.height = 12
+            chart_tpsl_m.width = 25
+            ws_charts.add_chart(chart_tpsl_m, "E200")
+
+            # === SECTION 10: ÉVOLUTION DE LA SOMME CUMULÉE ===
+            ws_charts['A220'] = "📈 ÉVOLUTION DE LA SOMME CUMULÉE"
+            ws_charts['A220'].font = Font(bold=True, color="366092", size=14)
+            ws_charts['A222'] = "Date"
+            ws_charts['B222'] = "Solde cumulé (€)"
+            
+            # Récupérer les données de la colonne "solde_cumule" de df_final
+            row_ptr9 = 223
+            for _, row in df_final.iterrows():
+                # Vérifier que la colonne datetime existe
+                if 'datetime' in df_final.columns:
+                    ws_charts.cell(row=row_ptr9, column=1, value=row['datetime'])
+                elif 'Date' in df_final.columns:
+                    ws_charts.cell(row=row_ptr9, column=1, value=row['Date'])
+                elif 'date' in df_final.columns:
+                    ws_charts.cell(row=row_ptr9, column=1, value=row['date'])
+                else:
+                    print(f"[WARNING] Aucune colonne de date trouvée. Colonnes disponibles: {list(df_final.columns)}")
+                    ws_charts.cell(row=row_ptr9, column=1, value=f"Ligne {row_ptr9-222}")
+                
+                # Vérifier que la colonne solde_cumule existe
+                if 'solde_cumule' in df_final.columns:
+                    ws_charts.cell(row=row_ptr9, column=2, value=float(round(row['solde_cumule'], 2)))
+                elif 'Solde_cumule' in df_final.columns:
+                    ws_charts.cell(row=row_ptr9, column=2, value=float(round(row['Solde_cumule'], 2)))
+                elif 'solde_cumulé' in df_final.columns:
+                    ws_charts.cell(row=row_ptr9, column=2, value=float(round(row['solde_cumulé'], 2)))
+                else:
+                    print(f"[WARNING] Colonne 'solde_cumule' non trouvée. Colonnes disponibles: {list(df_final.columns)}")
+                    ws_charts.cell(row=row_ptr9, column=2, value=0.0)
+                row_ptr9 += 1
+            
+            chart_cumul = LineChart()
+            chart_cumul.title = "Évolution de la somme cumulée"
+            chart_cumul.y_axis.title = "Solde cumulé (€)"
+            chart_cumul.x_axis.title = "Date"
+            data = Reference(ws_charts, min_col=2, min_row=222, max_row=row_ptr9-1)
+            cats = Reference(ws_charts, min_col=1, min_row=223, max_row=row_ptr9-1)
+            chart_cumul.add_data(data, titles_from_data=True)
+            chart_cumul.set_categories(cats)
+            chart_cumul.legend.position = 'b'
+            chart_cumul.height = 15
+            chart_cumul.width = 30
+            ws_charts.add_chart(chart_cumul, "E220")
             
             # === ONGLET 2: DONNÉES BRUTES COMPLÈTES ===
             ws_data = wb.create_sheet("📋 Données Complètes")

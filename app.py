@@ -77,6 +77,12 @@ def process_files_background(task_id, file_paths, filter_type, solde_initial):
         
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         rapport_path = analyzer.create_excel_report(df_final, REPORTS_FOLDER, timestamp, filter_type)
+
+        # Agrégations pour graphiques côté Web
+        try:
+            aggs = analyzer.calculer_agregations_graphes(df_final)
+        except Exception:
+            aggs = {}
         
         # Calculer les statistiques finales
         total_trades = len(df_final)
@@ -108,7 +114,22 @@ def process_files_background(task_id, file_paths, filter_type, solde_initial):
             'trades_gagnants': trades_gagnants,
             'trades_perdants': trades_perdants,
             'taux_reussite': round(taux_reussite, 1),
-            'drawdown_max': round(drawdown_max, 2)
+            'drawdown_max': round(drawdown_max, 2),
+            # Exposer les agrégations essentielles (convertir en structures JSON-sérialisables)
+            'heures_in_counts': aggs.get('heures_in_counts').to_dict() if aggs.get('heures_in_counts') is not None and hasattr(aggs.get('heures_in_counts'), 'to_dict') else {},
+            'heures_out_counts': aggs.get('heures_out_counts').to_dict() if aggs.get('heures_out_counts') is not None and hasattr(aggs.get('heures_out_counts'), 'to_dict') else {},
+            'profits_par_heure_out': aggs.get('profits_par_heure_out').to_dict() if aggs.get('profits_par_heure_out') is not None and hasattr(aggs.get('profits_par_heure_out'), 'to_dict') else {},
+            'profits_par_jour_out': aggs.get('profits_par_jour_out').to_dict() if aggs.get('profits_par_jour_out') is not None and hasattr(aggs.get('profits_par_jour_out'), 'to_dict') else {},
+            'profits_par_mois_out': aggs.get('profits_par_mois_out').to_dict() if aggs.get('profits_par_mois_out') is not None and hasattr(aggs.get('profits_par_mois_out'), 'to_dict') else {},
+            'tp_par_heure': aggs.get('tp_par_heure').to_dict() if aggs.get('tp_par_heure') is not None and hasattr(aggs.get('tp_par_heure'), 'to_dict') else {},
+            'sl_par_heure': aggs.get('sl_par_heure').to_dict() if aggs.get('sl_par_heure') is not None and hasattr(aggs.get('sl_par_heure'), 'to_dict') else {},
+            'tp_par_jour': aggs.get('tp_par_jour').to_dict() if aggs.get('tp_par_jour') is not None and hasattr(aggs.get('tp_par_jour'), 'to_dict') else {},
+            'sl_par_jour': aggs.get('sl_par_jour').to_dict() if aggs.get('sl_par_jour') is not None and hasattr(aggs.get('sl_par_jour'), 'to_dict') else {},
+            'tp_par_mois': aggs.get('tp_par_mois').to_dict() if aggs.get('tp_par_mois') is not None and hasattr(aggs.get('tp_par_mois'), 'to_dict') else {},
+            'sl_par_mois': aggs.get('sl_par_mois').to_dict() if aggs.get('sl_par_mois') is not None and hasattr(aggs.get('sl_par_mois'), 'to_dict') else {},
+            'duree_moyenne_minutes': aggs.get('duree_moyenne_minutes') if aggs.get('duree_moyenne_minutes') is not None else None,
+            'duree_mediane_minutes': aggs.get('duree_mediane_minutes') if aggs.get('duree_mediane_minutes') is not None else None,
+            'evolution_somme_cumulee': aggs.get('evolution_somme_cumulee') if aggs.get('evolution_somme_cumulee') is not None else []
         }
         
         # Nettoyer les fichiers uploadés

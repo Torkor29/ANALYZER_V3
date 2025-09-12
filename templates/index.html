@@ -480,6 +480,7 @@
             to { transform: rotate(360deg); }
         }
     </style>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
     <div class="container">
@@ -624,13 +625,21 @@
         });
 
         function handleFiles(files) {
+            console.log('handleFiles called with', files.length, 'files');
             for (let file of files) {
+                console.log('Processing file:', file.name, 'type:', file.type);
                 if (file.type.includes('spreadsheet') || file.name.endsWith('.xlsx') || file.name.endsWith('.xls')) {
                     if (!selectedFiles.find(f => f.name === file.name)) {
                         selectedFiles.push(file);
+                        console.log('Added file:', file.name);
+                    } else {
+                        console.log('File already exists:', file.name);
                     }
+                } else {
+                    console.log('File rejected (not Excel):', file.name);
                 }
             }
+            console.log('Total selected files:', selectedFiles.length);
             updateFileList();
         }
 
@@ -695,8 +704,10 @@
         // Gestion du formulaire
         document.getElementById('uploadForm').addEventListener('submit', async (e) => {
             e.preventDefault();
+            console.log('Form submitted, selectedFiles:', selectedFiles.length);
             
             if (selectedFiles.length === 0) {
+                console.log('No files selected');
                 alert('Veuillez sélectionner au moins un fichier Excel.');
                 return;
             }
@@ -723,12 +734,15 @@
             document.getElementById('errorContainer').style.display = 'none';
 
             try {
+                console.log('Sending request to /upload with', selectedFiles.length, 'files');
                 const response = await fetch('/upload', {
                     method: 'POST',
                     body: formData
                 });
 
+                console.log('Response status:', response.status);
                 const result = await response.json();
+                console.log('Response result:', result);
 
                 if (result.success) {
                     currentTaskId = result.task_id;
@@ -738,6 +752,7 @@
                     showError(result.error);
                 }
             } catch (error) {
+                console.error('Upload error:', error);
                 showError('Erreur de connexion: ' + error.message);
             } finally {
                 // Restaurer le bouton
@@ -848,10 +863,313 @@
                 </div>
             `).join('');
 
+            // Ajouter les graphiques dynamiques sous les cartes
+            const chartsHtml = `
+                <div style="margin-top: 20px">
+                    <h4 style="margin-bottom:10px;color:#333"><i class="fas fa-chart-line"></i> Évolution de la somme cumulée</h4>
+                    <canvas id="chartEvolutionSomme"></canvas>
+                </div>
+                <div style="margin-top: 30px">
+                    <h4 style="margin-bottom:10px;color:#333"><i class="fas fa-sign-in-alt"></i> Répartition des ouvertures (IN) par heure</h4>
+                    <canvas id="chartHeuresIN"></canvas>
+                </div>
+                <div style="margin-top: 20px">
+                    <h4 style="margin-bottom:10px;color:#333"><i class="fas fa-sign-out-alt"></i> Répartition des fermetures (dernier OUT) par heure</h4>
+                    <canvas id="chartHeuresOUT"></canvas>
+                </div>
+                <div style="margin-top: 30px">
+                    <h4 style="margin-bottom:10px;color:#333"><i class="fas fa-clock"></i> Profits par heure (OUT)</h4>
+                    <canvas id="chartProfitsHeure"></canvas>
+                </div>
+                <div style="margin-top: 30px; display:grid; grid-template-columns:1fr 1fr; gap:20px;">
+                    <div>
+                        <h4 style="margin-bottom:10px;color:#333"><i class="fas fa-calendar-day"></i> Profits par jour (0=Lun)</h4>
+                        <canvas id="chartProfitsJour"></canvas>
+                    </div>
+                    <div>
+                        <h4 style="margin-bottom:10px;color:#333"><i class="fas fa-calendar"></i> Profits par mois</h4>
+                        <canvas id="chartProfitsMois"></canvas>
+                    </div>
+                </div>
+                <div style="margin-top: 30px; display:grid; grid-template-columns:1fr 1fr; gap:20px;">
+                    <div>
+                        <h4 style="margin-bottom:10px;color:#333"><i class="fas fa-bullseye"></i> Nombre de TP par heure</h4>
+                        <canvas id="chartTPHeure"></canvas>
+                    </div>
+                    <div>
+                        <h4 style="margin-bottom:10px;color:#333"><i class="fas fa-times-circle"></i> Nombre de SL par heure</h4>
+                        <canvas id="chartSLHeure"></canvas>
+                    </div>
+                </div>
+                <div style="margin-top: 30px; display:grid; grid-template-columns:1fr 1fr; gap:20px;">
+                    <div>
+                        <h4 style="margin-bottom:10px;color:#333"><i class="fas fa-bullseye"></i> Nombre de TP par jour</h4>
+                        <canvas id="chartTPJour"></canvas>
+                    </div>
+                    <div>
+                        <h4 style="margin-bottom:10px;color:#333"><i class="fas fa-times-circle"></i> Nombre de SL par jour</h4>
+                        <canvas id="chartSLJour"></canvas>
+                    </div>
+                </div>
+                <div style="margin-top: 30px; display:grid; grid-template-columns:1fr 1fr; gap:20px;">
+                    <div>
+                        <h4 style="margin-bottom:10px;color:#333"><i class="fas fa-bullseye"></i> Nombre de TP par mois</h4>
+                        <canvas id="chartTPMois"></canvas>
+                    </div>
+                    <div>
+                        <h4 style="margin-bottom:10px;color:#333"><i class="fas fa-times-circle"></i> Nombre de SL par mois</h4>
+                        <canvas id="chartSLMois"></canvas>
+                    </div>
+                </div>
+                <div style="margin-top: 30px">
+                    <h4 style="margin-bottom:10px;color:#333"><i class="fas fa-hourglass-half"></i> Temps moyen des trades</h4>
+                    <div id="avgDuration" style="font-weight:600;color:#333"></div>
+                </div>
+            `;
+
             // Configurer le lien de téléchargement
             downloadLink.href = status.report_url;
 
             resultsContainer.style.display = 'block';
+            // Ajouter les canvases si pas déjà présents
+            if (!document.getElementById('chartHeures')) {
+                const wrapper = document.createElement('div');
+                wrapper.innerHTML = chartsHtml;
+                resultsContainer.appendChild(wrapper);
+            }
+
+            // Construire données heures IN/OUT
+            const heuresIn = stats.heures_in_counts || {};
+            const heuresOut = stats.heures_out_counts || {};
+            const hours = Array.from({length:24}, (_,i)=>i);
+            const dataIn = hours.map(h => heuresIn[h] || 0);
+            const dataOut = hours.map(h => heuresOut[h] || 0);
+
+            // Évolution de la somme cumulée (EN PREMIER)
+            const ctxEvolution = document.getElementById('chartEvolutionSomme').getContext('2d');
+            const evolutionData = stats.evolution_somme_cumulee || [];
+            
+            if (evolutionData.length > 0) {
+                new Chart(ctxEvolution, {
+                    type: 'line',
+                    data: {
+                        labels: evolutionData.map(item => {
+                            const date = new Date(item.date);
+                            return date.toLocaleDateString('fr-FR') + ' ' + date.toLocaleTimeString('fr-FR', {hour: '2-digit', minute: '2-digit'});
+                        }),
+                        datasets: [{
+                            label: 'Solde cumulé (€)',
+                            data: evolutionData.map(item => item.solde),
+                            borderColor: 'rgba(102,126,234,1)',
+                            backgroundColor: 'rgba(102,126,234,0.1)',
+                            borderWidth: 2,
+                            fill: true,
+                            tension: 0.1
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        scales: {
+                            y: {
+                                beginAtZero: false,
+                                title: {
+                                    display: true,
+                                    text: 'Solde cumulé (€)'
+                                }
+                            },
+                            x: {
+                                title: {
+                                    display: true,
+                                    text: 'Date'
+                                }
+                            }
+                        },
+                        plugins: {
+                            legend: {
+                                display: true,
+                                position: 'top'
+                            }
+                        }
+                    }
+                });
+            } else {
+                // Si pas de données, afficher un message
+                document.getElementById('chartEvolutionSomme').style.display = 'none';
+                const evolutionDiv = document.querySelector('#chartEvolutionSomme').parentElement;
+                evolutionDiv.innerHTML += '<p style="color:#666;font-style:italic;">Aucune donnée d\'évolution disponible</p>';
+            }
+
+            const ctxHin = document.getElementById('chartHeuresIN').getContext('2d');
+            new Chart(ctxHin, {
+                type: 'bar',
+                data: {
+                    labels: hours.map(h => `${h}h`),
+                    datasets: [{
+                        label: 'IN (comptage)',
+                        data: dataIn,
+                        backgroundColor: 'rgba(102,126,234,0.7)'
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: { legend: { display: true } },
+                    scales: { y: { beginAtZero: true } }
+                }
+            });
+
+            const ctxHout = document.getElementById('chartHeuresOUT').getContext('2d');
+            new Chart(ctxHout, {
+                type: 'bar',
+                data: {
+                    labels: hours.map(h => `${h}h`),
+                    datasets: [{
+                        label: 'OUT dernier (comptage)',
+                        data: dataOut,
+                        backgroundColor: 'rgba(86,171,47,0.7)'
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: { legend: { display: true } },
+                    scales: { y: { beginAtZero: true } }
+                }
+            });
+
+            // Profits par heure
+            const ph = stats.profits_par_heure_out || {};
+            const dataPh = hours.map(h => ph[h] || 0);
+            const ctxPH = document.getElementById('chartProfitsHeure').getContext('2d');
+            new Chart(ctxPH, {
+                type: 'bar',
+                data: { labels: hours.map(h => `${h}h`), datasets: [{ label: 'Profit (€)', data: dataPh, backgroundColor: 'rgba(118,75,162,0.6)' }] },
+                options: { responsive: true, scales: { y: { beginAtZero: true } } }
+            });
+
+            // Profits par jour (0-6)
+            const jours = [0,1,2,3,4,5,6];
+            const pj = stats.profits_par_jour_out || {};
+            const dataPj = jours.map(j => pj[j] || 0);
+            const ctxPJ = document.getElementById('chartProfitsJour').getContext('2d');
+            new Chart(ctxPJ, {
+                type: 'bar',
+                data: { labels: ['Lun','Mar','Mer','Jeu','Ven','Sam','Dim'], datasets: [{ label: 'Profit (€)', data: dataPj, backgroundColor: 'rgba(102,126,234,0.6)' }] },
+                options: { responsive: true, scales: { y: { beginAtZero: true } } }
+            });
+
+            // Profits par mois (1-12)
+            const mois = [1,2,3,4,5,6,7,8,9,10,11,12];
+            const pm = stats.profits_par_mois_out || {};
+            const dataPm = mois.map(m => pm[m] || 0);
+            const ctxPM = document.getElementById('chartProfitsMois').getContext('2d');
+            new Chart(ctxPM, {
+                type: 'bar',
+                data: { labels: ['Jan','Fév','Mar','Avr','Mai','Juin','Juil','Aoû','Sep','Oct','Nov','Déc'], datasets: [{ label: 'Profit (€)', data: dataPm, backgroundColor: 'rgba(86,171,47,0.6)' }] },
+                options: { responsive: true, scales: { y: { beginAtZero: true } } }
+            });
+
+            // Durée moyenne
+            const avg = stats.duree_moyenne_minutes;
+            const median = stats.duree_mediane_minutes;
+            if (avg !== null && avg !== undefined) {
+                const el = document.getElementById('avgDuration');
+                const heures = Math.floor(avg / 60);
+                const minutes = Math.round(avg % 60);
+                const medHeures = median ? Math.floor(median / 60) : null;
+                const medMinutes = median ? Math.round(median % 60) : null;
+                el.textContent = heures > 0 ? `Moyenne: ${heures}h ${minutes}m` : `Moyenne: ${minutes} minutes`;
+                if (median !== null && median !== undefined) {
+                    el.textContent += medHeures > 0 ? ` | Médiane: ${medHeures}h ${medMinutes}m` : ` | Médiane: ${medMinutes} minutes`;
+                }
+            }
+
+            // TP/SL charts
+            const tp_h = stats.tp_par_heure || {}, sl_h = stats.sl_par_heure || {};
+            const ctxTPH = document.getElementById('chartTPHeure').getContext('2d');
+            new Chart(ctxTPH, {
+                type: 'bar',
+                data: {
+                    labels: hours.map(h => `${h}h`),
+                    datasets: [{
+                        label: 'TP (nb)',
+                        data: hours.map(h => tp_h[h] || 0),
+                        backgroundColor: 'rgba(86,171,47,0.7)'
+                    }]
+                },
+                options: { responsive: true, scales: { y: { beginAtZero: true } } }
+            });
+            
+            const ctxSLH = document.getElementById('chartSLHeure').getContext('2d');
+            new Chart(ctxSLH, {
+                type: 'bar',
+                data: {
+                    labels: hours.map(h => `${h}h`),
+                    datasets: [{
+                        label: 'SL (nb)',
+                        data: hours.map(h => sl_h[h] || 0),
+                        backgroundColor: 'rgba(229,62,62,0.7)'
+                    }]
+                },
+                options: { responsive: true, scales: { y: { beginAtZero: true } } }
+            });
+
+            const tp_d = stats.tp_par_jour || {}, sl_d = stats.sl_par_jour || {};
+            const ctxTPD = document.getElementById('chartTPJour').getContext('2d');
+            new Chart(ctxTPD, {
+                type: 'bar',
+                data: {
+                    labels: ['Lun','Mar','Mer','Jeu','Ven','Sam','Dim'],
+                    datasets: [{
+                        label: 'TP (nb)',
+                        data: jours.map(j => tp_d[j] || 0),
+                        backgroundColor: 'rgba(86,171,47,0.7)'
+                    }]
+                },
+                options: { responsive: true, scales: { y: { beginAtZero: true } } }
+            });
+            
+            const ctxSLD = document.getElementById('chartSLJour').getContext('2d');
+            new Chart(ctxSLD, {
+                type: 'bar',
+                data: {
+                    labels: ['Lun','Mar','Mer','Jeu','Ven','Sam','Dim'],
+                    datasets: [{
+                        label: 'SL (nb)',
+                        data: jours.map(j => sl_d[j] || 0),
+                        backgroundColor: 'rgba(229,62,62,0.7)'
+                    }]
+                },
+                options: { responsive: true, scales: { y: { beginAtZero: true } } }
+            });
+
+            const tp_m = stats.tp_par_mois || {}, sl_m = stats.sl_par_mois || {};
+            const ctxTPM = document.getElementById('chartTPMois').getContext('2d');
+            new Chart(ctxTPM, {
+                type: 'bar',
+                data: {
+                    labels: ['Jan','Fév','Mar','Avr','Mai','Juin','Juil','Aoû','Sep','Oct','Nov','Déc'],
+                    datasets: [{
+                        label: 'TP (nb)',
+                        data: [1,2,3,4,5,6,7,8,9,10,11,12].map(m => tp_m[m] || 0),
+                        backgroundColor: 'rgba(86,171,47,0.7)'
+                    }]
+                },
+                options: { responsive: true, scales: { y: { beginAtZero: true } } }
+            });
+            
+            const ctxSLM = document.getElementById('chartSLMois').getContext('2d');
+            new Chart(ctxSLM, {
+                type: 'bar',
+                data: {
+                    labels: ['Jan','Fév','Mar','Avr','Mai','Juin','Juil','Aoû','Sep','Oct','Nov','Déc'],
+                    datasets: [{
+                        label: 'SL (nb)',
+                        data: [1,2,3,4,5,6,7,8,9,10,11,12].map(m => sl_m[m] || 0),
+                        backgroundColor: 'rgba(229,62,62,0.7)'
+                    }]
+                },
+                options: { responsive: true, scales: { y: { beginAtZero: true } } }
+            });
+
             resultsContainer.scrollIntoView({ behavior: 'smooth' });
         }
 
