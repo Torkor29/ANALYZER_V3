@@ -1143,6 +1143,176 @@ class TradingAnalyzer:
             result["sessions_total"] = result_global.get("sessions_total", {})
 
         return result
+
+    def calculer_patterns(self, df: pd.DataFrame, min_support: float = 0.03, min_confidence: float = 0.55, top_k: int = 10):
+        """MVP: Détecte des patterns (itemsets 1-2) et génère des règles vers TP/SL.
+
+        - Regroupe les lignes par trade complet (Cle_Match)
+        - Extrait un ensemble d'items catégoriels simples par trade
+        - Calcule support, confidence(X⇒TP/SL) et lift par rapport au taux de base
+        - Retourne Top K favorables (vers TP) et défavorables (vers SL)
+        """
+        results = {"top_tp": [], "top_sl": []}
+        if "Cle_Match" not in df.columns or len(df) == 0:
+            return results
+
+        data = df.copy()
+        data["Datetime"] = pd.to_datetime(data.get("Heure d'ouverture"), errors='coerce')
+        data = data[data["Datetime"].notna()]
+
+        # Premier IN et dernier OUT par trade
+        df_in = data[data["Direction"] == "in"].copy()
+        df_out = data[data["Direction"] == "out"].copy()
+        if len(df_in) == 0 or len(df_out) == 0:
+            return results
+
+        first_in = df_in.sort_values(["Cle_Match","Datetime"]).groupby("Cle_Match").head(1)
+        last_out = df_out.sort_values(["Cle_Match","Datetime"]).groupby("Cle_Match").tail(1)
+        profit_par_trade = data.groupby("Cle_Match")["Profit"].sum()
+        pips_par_trade = data.groupby("Cle_Match")["Profit_pips"].sum() if "Profit_pips" in data.columns else None
+        outs_count = df_out.groupby("Cle_Match").size()
+
+        # Construction du tableau des trades complets
+        trades = first_in[["Cle_Match","Symbole_ordre","Type_ordre","Datetime"]].rename(columns={"Datetime":"InTime"}).copy()
+        trades = trades.merge(last_out[["Cle_Match","Datetime"]].rename(columns={"Datetime":"OutTime"}), on="Cle_Match", how="inner")
+        trades["Profit_Trade"] = trades["Cle_Match"].map(profit_par_trade)
+        if pips_par_trade is not None:
+            trades["Pips_Trade"] = trades["Cle_Match"].map(pips_par_trade)
+        trades["Nb_OUTs"] = trades["Cle_Match"].map(outs_count).fillna(0).astype(int)
+
+        # Sessions et features dérivées
+        def heure_to_session(h):
+            if 0 <= h <= 7:
+                return "Asie"
+            if 8 <= h <= 15:
+                return "Europe"
+            return "Amérique"
+
+        trades["Session_IN"] = trades["InTime"].dt.hour.apply(heure_to_session)
+        trades["Heure_IN"] = trades["InTime"].dt.hour
+        trades["Duree_min"] = (trades["OutTime"] - trades["InTime"]).dt.total_seconds() / 60.0
+
+        def bucket_hour(h):
+            try:
+                h = int(h)
+            except Exception:
+                return "HNA"
+            if h < 8:
+                return "H[0-7]"
+            if h < 12:
+                return "H[8-11]"
+            if h < 16:
+                return "H[12-15]"
+            if h < 20:
+                return "H[16-19]"
+            return "H[20-23]"
+
+        def bucket_duration(m):
+            try:
+                m = float(m)
+            except Exception:
+                return "DUR_NA"
+            if m < 30:
+                return "D<30m"
+            if m <= 120:
+                return "D30-120m"
+            return ">120m"
+
+        def bucket_outs(n):
+            try:
+                n = int(n)
+            except Exception:
+                return "OUT_NA"
+            if n <= 1:
+                return "OUT=1"
+            if n <= 3:
+                return "OUT=2-3"
+            return "OUT>=4"
+
+        trades["Heure_Bucket"] = trades["Heure_IN"].apply(bucket_hour)
+        trades["Duree_Bucket"] = trades["Duree_min"].apply(bucket_duration)
+        trades["OUTS_Bucket"] = trades["Nb_OUTs"].apply(bucket_outs)
+        trades["Result"] = trades["Profit_Trade"].apply(lambda x: "TP" if x > 0 else ("SL" if x < 0 else "NEUTRE"))
+
+        # Ensemble d'items
+        def items_for_row(r):
+            items = set()
+            if pd.notna(r.get("Symbole_ordre")):
+                items.add(f"PAIR={str(r['Symbole_ordre']).upper()}")
+            if pd.notna(r.get("Type_ordre")):
+                items.add(f"DIR={str(r['Type_ordre']).lower()}")
+            items.add(f"SESSION={r['Session_IN']}")
+            items.add(f"{r['Heure_Bucket']}")
+            items.add(f"{r['Duree_Bucket']}")
+            items.add(f"{r['OUTS_Bucket']}")
+            return items
+
+        trades["Items"] = trades.apply(items_for_row, axis=1)
+
+        # Comptages
+        N = len(trades)
+        base_tp = (trades["Result"] == "TP").mean() if N > 0 else 0
+        base_sl = (trades["Result"] == "SL").mean() if N > 0 else 0
+
+        from collections import Counter
+        count_1 = Counter()
+        count_1_tp = Counter()
+        count_1_sl = Counter()
+        count_2 = Counter()
+        count_2_tp = Counter()
+        count_2_sl = Counter()
+
+        for _, r in trades.iterrows():
+            items = sorted(list(r["Items"]))
+            res = r["Result"]
+            # size-1
+            for a in items:
+                count_1[a] += 1
+                if res == "TP":
+                    count_1_tp[a] += 1
+                elif res == "SL":
+                    count_1_sl[a] += 1
+            # size-2 (combinatoire limitée)
+            for i in range(len(items)):
+                for j in range(i+1, len(items)):
+                    pair = (items[i], items[j])
+                    count_2[pair] += 1
+                    if res == "TP":
+                        count_2_tp[pair] += 1
+                    elif res == "SL":
+                        count_2_sl[pair] += 1
+
+        def build_rows(counter_all, counter_pos, baseline):
+            rows = []
+            for item, cnt in counter_all.items():
+                support = cnt / N
+                if support < min_support:
+                    continue
+                pos = counter_pos.get(item, 0)
+                conf = pos / cnt if cnt > 0 else 0
+                lift = (conf / baseline) if baseline > 0 else 0
+                rows.append({
+                    "items": item if isinstance(item, str) else " & ".join(item),
+                    "count": int(cnt),
+                    "support": round(support, 3),
+                    "confidence": round(conf, 3),
+                    "lift": round(lift, 3)
+                })
+            # Filtrer min_confidence et trier par lift puis support
+            rows = [r for r in rows if r["confidence"] >= min_confidence]
+            rows.sort(key=lambda x: (x["lift"], x["support"]), reverse=True)
+            return rows[:top_k]
+
+        top_tp = build_rows(count_1, count_1_tp, base_tp) + build_rows(count_2, count_2_tp, base_tp)
+        top_sl = build_rows(count_1, count_1_sl, base_sl) + build_rows(count_2, count_2_sl, base_sl)
+
+        # Garder top_k au global après concat
+        top_tp = sorted(top_tp, key=lambda x: (x["lift"], x["support"]), reverse=True)[:top_k]
+        top_sl = sorted(top_sl, key=lambda x: (x["lift"], x["support"]), reverse=True)[:top_k]
+
+        results["top_tp"] = top_tp
+        results["top_sl"] = top_sl
+        return results
     
     def create_excel_report(self, df_final, reports_folder, timestamp, filter_type=None):
         """Crée un rapport Excel complet avec graphiques"""
@@ -1830,6 +2000,61 @@ class TradingAnalyzer:
                     except Exception as e:
                         print(f"[WARNING] Could not create sheet for {instrument}: {str(e)}")
                         continue
+
+            # === ONGLET 6: PATTERNS (MVP) ===
+            try:
+                patterns = self.calculer_patterns(df_final)
+                ws_patterns = wb.create_sheet("🧩 Patterns")
+                # Explications
+                ws_patterns['A1'] = "🧩 Détection de patterns (MVP)"
+                ws_patterns['A1'].font = Font(bold=True, color="366092", size=14)
+                exp_lines = [
+                    "Items: ensemble d'attributs décrivant un contexte (ex: PAIR=EURUSD, SESSION=Europe, H[8-11], D<30m, OUT=1, DIR=buy).",
+                    "Count: nombre de trades contenant le pattern (itemset).",
+                    "Support: proportion de trades contenant le pattern = Count / N (N = total de trades complets).",
+                    "Confidence: probabilité de TP (ou SL) sachant le pattern = Count(pattern ∪ TP) / Count(pattern).",
+                    "Lift: surperformance relative = Confidence / P(TP) (ou / P(SL)). Lift > 1 => pattern informatif.",
+                ]
+                for i, line in enumerate(exp_lines, start=2):
+                    ws_patterns[f'A{i}'] = line
+                # Titre bloc TP
+                start_tp_row = len(exp_lines) + 3
+                ws_patterns[f'A{start_tp_row}'] = "TOP PATTERNS FAVORABLES (⇒ TP)"
+                ws_patterns[f'A{start_tp_row}'].font = Font(bold=True, color="366092", size=14)
+                headers = ["Items", "Count", "Support", "Confidence", "Lift"]
+                for i, h in enumerate(headers, 1):
+                    cell = ws_patterns.cell(row=start_tp_row+2, column=i, value=h)
+                    cell.font = Font(bold=True, color="FFFFFF")
+                    cell.fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
+                    cell.alignment = Alignment(horizontal="center")
+                row = start_tp_row + 3
+                for r in patterns.get('top_tp', []):
+                    ws_patterns.cell(row=row, column=1, value=r['items'])
+                    ws_patterns.cell(row=row, column=2, value=r['count'])
+                    ws_patterns.cell(row=row, column=3, value=r['support'])
+                    ws_patterns.cell(row=row, column=4, value=r['confidence'])
+                    ws_patterns.cell(row=row, column=5, value=r['lift'])
+                    row += 1
+
+                row += 2
+                ws_patterns.cell(row=row, column=1, value="TOP PATTERNS DÉFAVORABLES (⇒ SL)")
+                ws_patterns.cell(row=row, column=1).font = Font(bold=True, color="366092", size=14)
+                row += 2
+                for i, h in enumerate(headers, 1):
+                    cell = ws_patterns.cell(row=row, column=i, value=h)
+                    cell.font = Font(bold=True, color="FFFFFF")
+                    cell.fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
+                    cell.alignment = Alignment(horizontal="center")
+                row += 1
+                for r in patterns.get('top_sl', []):
+                    ws_patterns.cell(row=row, column=1, value=r['items'])
+                    ws_patterns.cell(row=row, column=2, value=r['count'])
+                    ws_patterns.cell(row=row, column=3, value=r['support'])
+                    ws_patterns.cell(row=row, column=4, value=r['confidence'])
+                    ws_patterns.cell(row=row, column=5, value=r['lift'])
+                    row += 1
+            except Exception as e:
+                print(f"[WARNING] Patterns sheet creation failed: {e}")
             
             # Tableau: PERFORMANCE PAR SESSION (TOTAL) en bas du Résumé
             try:
