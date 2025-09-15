@@ -81,8 +81,10 @@ def process_files_background(task_id, file_paths, filter_type, solde_initial):
         # Agrégations pour graphiques côté Web
         try:
             aggs = analyzer.calculer_agregations_graphes(df_final)
+            sessions = analyzer.calculer_performance_par_session(df_final)
         except Exception:
             aggs = {}
+            sessions = {}
         
         # Calculer les statistiques finales
         total_trades = len(df_final)
@@ -129,7 +131,10 @@ def process_files_background(task_id, file_paths, filter_type, solde_initial):
             'sl_par_mois': aggs.get('sl_par_mois').to_dict() if aggs.get('sl_par_mois') is not None and hasattr(aggs.get('sl_par_mois'), 'to_dict') else {},
             'duree_moyenne_minutes': aggs.get('duree_moyenne_minutes') if aggs.get('duree_moyenne_minutes') is not None else None,
             'duree_mediane_minutes': aggs.get('duree_mediane_minutes') if aggs.get('duree_mediane_minutes') is not None else None,
-            'evolution_somme_cumulee': aggs.get('evolution_somme_cumulee') if aggs.get('evolution_somme_cumulee') is not None else []
+            'evolution_somme_cumulee': aggs.get('evolution_somme_cumulee') if aggs.get('evolution_somme_cumulee') is not None else [],
+            # Sessions (Asie/Europe/Amérique)
+            'sessions_total': sessions.get('sessions_total', {}),
+            'sessions_par_pair': sessions.get('sessions_par_pair', {})
         }
         
         # Nettoyer les fichiers uploadés

@@ -870,6 +870,29 @@
                     <canvas id="chartEvolutionSomme"></canvas>
                 </div>
                 <div style="margin-top: 30px">
+                    <h4 style="margin-bottom:10px;color:#333"><i class=\"fas fa-globe\"></i> Performance par session (Total)</h4>
+                    <div style=\"display:grid; grid-template-columns:1fr 1fr; gap:20px;\">
+                        <div>
+                            <h5 style=\"margin-bottom:8px;color:#333\">Qualité des ouvertures (IN)</h5>
+                            <canvas id=\"chartSessionInWinrate\"></canvas>
+                        </div>
+                        <div>
+                            <h5 style=\"margin-bottom:8px;color:#333\">PnL attribué (au dernier OUT)</h5>
+                            <canvas id=\"chartSessionPnL\"></canvas>
+                        </div>
+                    </div>
+                    <div style=\"margin-top:20px; display:grid; grid-template-columns:1fr 1fr; gap:20px;\">
+                        <div>
+                            <h5 style=\"margin-bottom:8px;color:#333\">TP par session (au dernier OUT)</h5>
+                            <canvas id=\"chartSessionTP\"></canvas>
+                        </div>
+                        <div>
+                            <h5 style=\"margin-bottom:8px;color:#333\">SL par session (au dernier OUT)</h5>
+                            <canvas id=\"chartSessionSL\"></canvas>
+                        </div>
+                    </div>
+                </div>
+                <div style="margin-top: 30px">
                     <h4 style="margin-bottom:10px;color:#333"><i class="fas fa-sign-in-alt"></i> Répartition des ouvertures (IN) par heure</h4>
                     <canvas id="chartHeuresIN"></canvas>
                 </div>
@@ -945,6 +968,14 @@
             const dataIn = hours.map(h => heuresIn[h] || 0);
             const dataOut = hours.map(h => heuresOut[h] || 0);
 
+            // Données sessions (total)
+            const sessionsTotal = stats.sessions_total || {};
+            const labelsSessions = ['Asie','Europe','Amérique'];
+            const inWinrate = labelsSessions.map(s => (sessionsTotal.taux_reussite_in_pct ? sessionsTotal.taux_reussite_in_pct[s] || 0 : 0));
+            const pnlSession = labelsSessions.map(s => (sessionsTotal.pnl_out ? sessionsTotal.pnl_out[s] || 0 : 0));
+            const tpSession = labelsSessions.map(s => (sessionsTotal.tp_out ? sessionsTotal.tp_out[s] || 0 : 0));
+            const slSession = labelsSessions.map(s => (sessionsTotal.sl_out ? sessionsTotal.sl_out[s] || 0 : 0));
+
             // Évolution de la somme cumulée (EN PREMIER)
             const ctxEvolution = document.getElementById('chartEvolutionSomme').getContext('2d');
             const evolutionData = stats.evolution_somme_cumulee || [];
@@ -998,6 +1029,32 @@
                 const evolutionDiv = document.querySelector('#chartEvolutionSomme').parentElement;
                 evolutionDiv.innerHTML += '<p style="color:#666;font-style:italic;">Aucune donnée d\'évolution disponible</p>';
             }
+
+            // Graphiques sessions (Total)
+            const ctxSessIn = document.getElementById('chartSessionInWinrate').getContext('2d');
+            new Chart(ctxSessIn, {
+                type: 'bar',
+                data: { labels: labelsSessions, datasets: [{ label: 'Taux de réussite IN (%)', data: inWinrate, backgroundColor: ['#6687ea','#56ab2f','#e53e3e'].map(c=>c+'AA') }] },
+                options: { responsive: true, scales: { y: { beginAtZero: true, max: 100 } } }
+            });
+            const ctxSessPnL = document.getElementById('chartSessionPnL').getContext('2d');
+            new Chart(ctxSessPnL, {
+                type: 'bar',
+                data: { labels: labelsSessions, datasets: [{ label: 'PnL (€) au dernier OUT', data: pnlSession, backgroundColor: 'rgba(118,75,162,0.6)' }] },
+                options: { responsive: true, scales: { y: { beginAtZero: true } } }
+            });
+            const ctxSessTP = document.getElementById('chartSessionTP').getContext('2d');
+            new Chart(ctxSessTP, {
+                type: 'bar',
+                data: { labels: labelsSessions, datasets: [{ label: 'TP (nb)', data: tpSession, backgroundColor: 'rgba(86,171,47,0.7)' }] },
+                options: { responsive: true, scales: { y: { beginAtZero: true } } }
+            });
+            const ctxSessSL = document.getElementById('chartSessionSL').getContext('2d');
+            new Chart(ctxSessSL, {
+                type: 'bar',
+                data: { labels: labelsSessions, datasets: [{ label: 'SL (nb)', data: slSession, backgroundColor: 'rgba(229,62,62,0.7)' }] },
+                options: { responsive: true, scales: { y: { beginAtZero: true } } }
+            });
 
             const ctxHin = document.getElementById('chartHeuresIN').getContext('2d');
             new Chart(ctxHin, {

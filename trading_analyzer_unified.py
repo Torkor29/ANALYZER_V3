@@ -1034,6 +1034,115 @@ class TradingAnalyzer:
         result["evolution_somme_cumulee"] = evolution_somme_cumulee
 
         return result
+
+    def calculer_performance_par_session(self, df: pd.DataFrame):
+        """Calcule la performance par session (Asie/Europe/Amérique).
+
+        Règles:
+        - Session Asie: 00:00-07:59 UTC
+        - Session Europe: 08:00-15:59 UTC
+        - Session Amérique: 16:00-23:59 UTC
+
+        Métriques:
+        - Côté IN (qualité d'ouverture): nb IN, taux de réussite des trades ouverts dans la session
+        - Côté OUT (attribution du PnL): PnL total basé sur le DERNIER OUT (profit total du trade), nb TP/SL
+        - Décliné par paire (Symbole_ordre) et au total
+        """
+        result = {
+            "sessions_total": {},
+            "sessions_par_pair": {}
+        }
+
+        if "Heure d'ouverture" not in df.columns or "Direction" not in df.columns:
+            return result
+
+        data = df.copy()
+        data["Datetime"] = pd.to_datetime(data["Heure d'ouverture"], errors='coerce')
+        data = data[data["Datetime"].notna()]
+        if len(data) == 0:
+            return result
+
+        # Helper: assign session by hour
+        def heure_to_session(h):
+            try:
+                h = int(h)
+            except Exception:
+                return "Autre"
+            if 0 <= h <= 7:
+                return "Asie"
+            if 8 <= h <= 15:
+                return "Europe"
+            if 16 <= h <= 23:
+                return "Amérique"
+            return "Autre"
+
+        data["Session"] = data["Datetime"].dt.hour.apply(heure_to_session)
+
+        # Calcul par paire puis total
+        symbols = list(data["Symbole_ordre"].dropna().unique()) if "Symbole_ordre" in data.columns else ["TOTAL"]
+        if "Symbole_ordre" not in data.columns:
+            data["Symbole_ordre"] = "TOTAL"
+
+        for symbole in symbols:
+            d = data[data["Symbole_ordre"] == symbole].copy()
+            if len(d) == 0:
+                continue
+
+            # Vue IN: qualité des ouvertures par session
+            d_in = d[d["Direction"] == "in"].copy()
+            in_by_session = d_in.groupby("Session").size().reindex(["Asie","Europe","Amérique"], fill_value=0)
+
+            # Pour le taux de réussite côté IN, on a besoin du résultat du trade complet
+            taux_reussite_in = {"Asie": 0.0, "Europe": 0.0, "Amérique": 0.0}
+            if "Cle_Match" in d.columns and len(d_in) > 0:
+                # Profit total par trade
+                profit_par_trade = d.groupby("Cle_Match")["Profit"].sum()
+                # Session d'ouverture du trade (session du premier IN)
+                first_in = d_in.sort_values(["Cle_Match","Datetime"]).groupby("Cle_Match").head(1)[["Cle_Match","Session"]]
+                first_in = first_in.dropna(subset=["Cle_Match"]).set_index("Cle_Match")
+                joined = first_in.join(profit_par_trade, how="left").rename(columns={"Profit":"Profit_Trade"})
+                for sess in ["Asie","Europe","Amérique"]:
+                    subset = joined[joined["Session"] == sess]
+                    denom = len(subset)
+                    if denom > 0:
+                        taux = (len(subset[subset["Profit_Trade"] > 0]) / denom) * 100.0
+                        taux_reussite_in[sess] = round(float(taux), 2)
+
+            # Vue OUT: attribution PnL sur le DERNIER OUT et comptage TP/SL par session de sortie
+            d_out = d[d["Direction"] == "out"].copy()
+            pnl_session = {"Asie": 0.0, "Europe": 0.0, "Amérique": 0.0}
+            tp_session = {"Asie": 0, "Europe": 0, "Amérique": 0}
+            sl_session = {"Asie": 0, "Europe": 0, "Amérique": 0}
+            if len(d_out) > 0 and "Cle_Match" in d_out.columns:
+                # Profit total du trade + session du dernier OUT
+                trade_profit = d.groupby("Cle_Match")["Profit"].sum().reset_index()
+                last_out = d_out.sort_values(["Cle_Match","Datetime"]).groupby("Cle_Match").tail(1)[["Cle_Match","Session"]]
+                final = trade_profit.merge(last_out, on="Cle_Match", how="inner")
+                for sess in ["Asie","Europe","Amérique"]:
+                    pnl = final[final["Session"] == sess]["Profit"].sum()
+                    pnl_session[sess] = float(round(pnl, 2))
+                    tp_session[sess] = int((final[(final["Session"] == sess) & (final["Profit"] > 0)]).shape[0])
+                    sl_session[sess] = int((final[(final["Session"] == sess) & (final["Profit"] < 0)]).shape[0])
+
+            bloc = {
+                "in_count": {k: int(in_by_session.get(k, 0)) for k in ["Asie","Europe","Amérique"]},
+                "taux_reussite_in_pct": taux_reussite_in,
+                "pnl_out": pnl_session,
+                "tp_out": tp_session,
+                "sl_out": sl_session
+            }
+
+            if symbole == "TOTAL":
+                result["sessions_total"] = bloc
+            else:
+                result["sessions_par_pair"][symbole] = bloc
+
+        # Si on a plusieurs paires, calculer aussi un total global en agrégeant toutes les lignes
+        if "TOTAL" not in symbols and "Symbole_ordre" in df.columns:
+            result_global = self.calculer_performance_par_session(data.assign(Symbole_ordre="TOTAL"))
+            result["sessions_total"] = result_global.get("sessions_total", {})
+
+        return result
     
     def create_excel_report(self, df_final, reports_folder, timestamp, filter_type=None):
         """Crée un rapport Excel complet avec graphiques"""
@@ -1156,6 +1265,7 @@ class TradingAnalyzer:
 
             # === AGRÉGATIONS POUR GRAPHIQUES (placer dans une feuille dédiée) ===
             aggs = self.calculer_agregations_graphes(df_final)
+            sessions = self.calculer_performance_par_session(df_final)
             ws_charts = wb.create_sheet("📈 Graphiques Résumé")
 
             # === SECTION 1: DURÉE MOYENNE ===
@@ -1692,11 +1802,59 @@ class TradingAnalyzer:
                                 ws_instrument.cell(row=row_idx, column=col_idx, value=value)
                         
                         print(f"[DEBUG] Created detailed sheet for {instrument}")
+
+                        # Tableau sessions pour cet instrument
+                        try:
+                            bloc_pair = sessions.get("sessions_par_pair", {}).get(instrument, {}) if 'sessions' in locals() else {}
+                            if bloc_pair:
+                                start_row = ws_instrument.max_row + 2
+                                ws_instrument[f'A{start_row}'] = "🌍 PERFORMANCE PAR SESSION"
+                                ws_instrument[f'A{start_row}'].font = Font(bold=True, color="366092")
+                                headers = ["Session", "IN (nb)", "Taux réussite IN (%)", "PnL OUT (€)", "TP (nb)", "SL (nb)"]
+                                for i, h in enumerate(headers, 0):
+                                    cell = ws_instrument.cell(row=start_row+2, column=1+i, value=h)
+                                    cell.font = Font(bold=True, color="FFFFFF")
+                                    cell.fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
+                                    cell.alignment = Alignment(horizontal="center")
+                                lignes = ["Asie","Europe","Amérique"]
+                                for r_idx, sess in enumerate(lignes, start=start_row+3):
+                                    ws_instrument.cell(row=r_idx, column=1, value=sess)
+                                    ws_instrument.cell(row=r_idx, column=2, value=int(bloc_pair.get('in_count',{}).get(sess,0)))
+                                    ws_instrument.cell(row=r_idx, column=3, value=float(bloc_pair.get('taux_reussite_in_pct',{}).get(sess,0)))
+                                    ws_instrument.cell(row=r_idx, column=4, value=float(bloc_pair.get('pnl_out',{}).get(sess,0)))
+                                    ws_instrument.cell(row=r_idx, column=5, value=int(bloc_pair.get('tp_out',{}).get(sess,0)))
+                                    ws_instrument.cell(row=r_idx, column=6, value=int(bloc_pair.get('sl_out',{}).get(sess,0)))
+                        except Exception as e:
+                            print(f"[WARNING] Session table for instrument {instrument} failed: {e}")
                         
                     except Exception as e:
                         print(f"[WARNING] Could not create sheet for {instrument}: {str(e)}")
                         continue
             
+            # Tableau: PERFORMANCE PAR SESSION (TOTAL) en bas du Résumé
+            try:
+                bloc_total = sessions.get("sessions_total", {}) if 'sessions' in locals() else {}
+                if bloc_total:
+                    last_row = ws_resume.max_row + 2
+                    ws_resume[f'A{last_row}'] = "🌍 PERFORMANCE PAR SESSION (TOTAL)"
+                    ws_resume[f'A{last_row}'].font = Font(bold=True, color="366092")
+                    headers = ["Session", "IN (nb)", "Taux réussite IN (%)", "PnL OUT (€)", "TP (nb)", "SL (nb)"]
+                    for i, h in enumerate(headers, 0):
+                        cell = ws_resume.cell(row=last_row+2, column=1+i, value=h)
+                        cell.font = Font(bold=True, color="FFFFFF")
+                        cell.fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
+                        cell.alignment = Alignment(horizontal="center")
+                    lignes = ["Asie","Europe","Amérique"]
+                    for r_idx, sess in enumerate(lignes, start=last_row+3):
+                        ws_resume.cell(row=r_idx, column=1, value=sess)
+                        ws_resume.cell(row=r_idx, column=2, value=int(bloc_total.get('in_count',{}).get(sess,0)))
+                        ws_resume.cell(row=r_idx, column=3, value=float(bloc_total.get('taux_reussite_in_pct',{}).get(sess,0)))
+                        ws_resume.cell(row=r_idx, column=4, value=float(bloc_total.get('pnl_out',{}).get(sess,0)))
+                        ws_resume.cell(row=r_idx, column=5, value=int(bloc_total.get('tp_out',{}).get(sess,0)))
+                        ws_resume.cell(row=r_idx, column=6, value=int(bloc_total.get('sl_out',{}).get(sess,0)))
+            except Exception as e:
+                print(f"[WARNING] Session total table creation failed: {e}")
+
             # Ajuster la largeur des colonnes
             for ws in wb.worksheets:
                 for column in ws.columns:
