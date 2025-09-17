@@ -447,6 +447,14 @@
             opacity: 0.8;
         }
 
+        /* Accordions */
+        .accordion-section { border: 2px solid #e8ebff; border-radius: 10px; margin: 14px 0; overflow: hidden; }
+        .accordion-header { background: #f8f9ff; cursor: pointer; padding: 12px 16px; display: flex; align-items: center; gap: 10px; }
+        .accordion-header h4 { margin: 0; color: #333; font-size: 1.05rem; }
+        .accordion-toggle { margin-left: auto; color: #667eea; font-weight: 700; }
+        .accordion-content { display: none; padding: 14px 16px; background: white; }
+        .accordion-section.open .accordion-content { display: block; }
+
         @media (max-width: 768px) {
             .header h1 {
                 font-size: 2rem;
@@ -865,72 +873,99 @@
 
             // Ajouter les graphiques dynamiques sous les cartes
             const chartsHtml = `
-                <div style="margin-top: 20px">
-                    <h4 style="margin-bottom:10px;color:#333"><i class="fas fa-chart-line"></i> Évolution de la somme cumulée</h4>
-                    <canvas id="chartEvolutionSomme"></canvas>
+                <div class="accordion-section open">
+                    <div class="accordion-header" onclick="this.parentElement.classList.toggle('open')">
+                        <h4><i class="fas fa-chart-line"></i> Évolution de la somme cumulée</h4>
+                        <span class="accordion-toggle">▼</span>
+                    </div>
+                    <div class="accordion-content"><canvas id="chartEvolutionSomme"></canvas></div>
                 </div>
-                <div style="margin-top: 30px">
-                    <h4 style="margin-bottom:10px;color:#333"><i class=\"fas fa-globe\"></i> Performance par session (Total)</h4>
-                    <div style=\"display:grid; grid-template-columns:1fr 1fr; gap:20px;\">
-                        <div>
-                            <h5 style=\"margin-bottom:8px;color:#333\">Qualité des ouvertures (IN)</h5>
-                            <canvas id=\"chartSessionInWinrate\"></canvas>
+                <div class="accordion-section">
+                    <div class="accordion-header" onclick="this.parentElement.classList.toggle('open')">
+                        <h4><i class=\"fas fa-globe\"></i> Performance par session (Total)</h4>
+                        <span class="accordion-toggle">▼</span>
+                    </div>
+                    <div class="accordion-content">
+                        <div style=\"display:grid; grid-template-columns:1fr 1fr; gap:20px;\">
+                            <div>
+                                <h5 style=\"margin-bottom:8px;color:#333\">Qualité des ouvertures (IN)</h5>
+                                <canvas id=\"chartSessionInWinrate\"></canvas>
+                            </div>
+                            <div>
+                                <h5 style=\"margin-bottom:8px;color:#333\">PnL attribué (au dernier OUT)</h5>
+                                <canvas id=\"chartSessionPnL\"></canvas>
+                            </div>
                         </div>
-                        <div>
-                            <h5 style=\"margin-bottom:8px;color:#333\">PnL attribué (au dernier OUT)</h5>
-                            <canvas id=\"chartSessionPnL\"></canvas>
-                        </div>
-                    </div>
-                    <div style=\"margin-top:20px; display:grid; grid-template-columns:1fr 1fr; gap:20px;\">
-                        <div>
-                            <h5 style=\"margin-bottom:8px;color:#333\">TP par session (au dernier OUT)</h5>
-                            <canvas id=\"chartSessionTP\"></canvas>
-                        </div>
-                        <div>
-                            <h5 style=\"margin-bottom:8px;color:#333\">SL par session (au dernier OUT)</h5>
-                            <canvas id=\"chartSessionSL\"></canvas>
+                        <div style=\"margin-top:20px; display:grid; grid-template-columns:1fr 1fr; gap:20px;\">
+                            <div>
+                                <h5 style=\"margin-bottom:8px;color:#333\">TP par session (au dernier OUT)</h5>
+                                <canvas id=\"chartSessionTP\"></canvas>
+                            </div>
+                            <div>
+                                <h5 style=\"margin-bottom:8px;color:#333\">SL par session (au dernier OUT)</h5>
+                                <canvas id=\"chartSessionSL\"></canvas>
+                            </div>
                         </div>
                     </div>
                 </div>
-                <div style="margin-top: 30px">
-                    <h4 style="margin-bottom:10px;color:#333"><i class="fas fa-sign-in-alt"></i> Répartition des ouvertures (IN) par heure</h4>
-                    <canvas id="chartHeuresIN"></canvas>
-                </div>
-                <div style="margin-top: 20px">
-                    <h4 style="margin-bottom:10px;color:#333"><i class="fas fa-sign-out-alt"></i> Répartition des fermetures (dernier OUT) par heure</h4>
-                    <canvas id="chartHeuresOUT"></canvas>
-                </div>
-                <div style="margin-top: 30px">
-                    <h4 style="margin-bottom:10px;color:#333"><i class="fas fa-clock"></i> Profits vs Pertes par heure (OUT)</h4>
-                    <canvas id="chartProfitsPertesHeure"></canvas>
-                </div>
-                <div style="margin-top: 30px; display:grid; grid-template-columns:1fr 1fr; gap:20px;">
-                    <div>
-                        <h4 style="margin-bottom:10px;color:#333"><i class="fas fa-calendar-day"></i> Profits vs Pertes par jour</h4>
-                        <canvas id="chartProfitsPertesJour"></canvas>
+                <div class="accordion-section">
+                    <div class="accordion-header" onclick="this.parentElement.classList.toggle('open')">
+                        <h4><i class="fas fa-sign-in-alt"></i> Répartition des IN/OUT</h4>
+                        <span class="accordion-toggle">▼</span>
                     </div>
-                    <div>
-                        <h4 style="margin-bottom:10px;color:#333"><i class="fas fa-calendar"></i> Profits vs Pertes par mois</h4>
-                        <canvas id="chartProfitsPertesMois"></canvas>
+                    <div class="accordion-content">
+                        <h5 style="margin-bottom:8px;color:#333">Ouvertures (IN) par heure</h5>
+                        <canvas id="chartHeuresIN"></canvas>
+                        <h5 style="margin:16px 0 8px;color:#333">Fermetures (dernier OUT) par heure</h5>
+                        <canvas id="chartHeuresOUT"></canvas>
                     </div>
                 </div>
-                <div style="margin-top: 30px">
-                    <h4 style="margin-bottom:10px;color:#333"><i class="fas fa-bullseye"></i> TP vs SL par heure</h4>
-                    <canvas id="chartTPSLHeure"></canvas>
-                </div>
-                <div style="margin-top: 30px; display:grid; grid-template-columns:1fr 1fr; gap:20px;">
-                    <div>
-                        <h4 style="margin-bottom:10px;color:#333"><i class="fas fa-bullseye"></i> TP vs SL par jour</h4>
-                        <canvas id="chartTPSLJour"></canvas>
+                <div class="accordion-section">
+                    <div class="accordion-header" onclick="this.parentElement.classList.toggle('open')">
+                        <h4><i class="fas fa-euro-sign"></i> Profits vs Pertes</h4>
+                        <span class="accordion-toggle">▼</span>
                     </div>
-                    <div>
-                        <h4 style="margin-bottom:10px;color:#333"><i class="fas fa-bullseye"></i> TP vs SL par mois</h4>
-                        <canvas id="chartTPSLMois"></canvas>
+                    <div class="accordion-content">
+                        <h5 style="margin-bottom:8px;color:#333">Par heure</h5>
+                        <canvas id="chartProfitsPertesHeure"></canvas>
+                        <div style="margin-top:20px; display:grid; grid-template-columns:1fr 1fr; gap:20px;">
+                            <div>
+                                <h5 style="margin-bottom:8px;color:#333">Par jour</h5>
+                                <canvas id="chartProfitsPertesJour"></canvas>
+                            </div>
+                            <div>
+                                <h5 style="margin-bottom:8px;color:#333">Par mois</h5>
+                                <canvas id="chartProfitsPertesMois"></canvas>
+                            </div>
+                        </div>
                     </div>
                 </div>
-                <div style="margin-top: 30px">
-                    <h4 style="margin-bottom:10px;color:#333"><i class="fas fa-hourglass-half"></i> Temps moyen des trades</h4>
-                    <div id="avgDuration" style="font-weight:600;color:#333"></div>
+                <div class="accordion-section">
+                    <div class="accordion-header" onclick="this.parentElement.classList.toggle('open')">
+                        <h4><i class="fas fa-bullseye"></i> TP vs SL</h4>
+                        <span class="accordion-toggle">▼</span>
+                    </div>
+                    <div class="accordion-content">
+                        <h5 style="margin-bottom:8px;color:#333">Par heure</h5>
+                        <canvas id="chartTPSLHeure"></canvas>
+                        <div style="margin-top:20px; display:grid; grid-template-columns:1fr 1fr; gap:20px;">
+                            <div>
+                                <h5 style="margin-bottom:8px;color:#333">Par jour</h5>
+                                <canvas id="chartTPSLJour"></canvas>
+                            </div>
+                            <div>
+                                <h5 style="margin-bottom:8px;color:#333">Par mois</h5>
+                                <canvas id="chartTPSLMois"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="accordion-section">
+                    <div class="accordion-header" onclick="this.parentElement.classList.toggle('open')">
+                        <h4><i class="fas fa-hourglass-half"></i> Temps moyen des trades</h4>
+                        <span class="accordion-toggle">▼</span>
+                    </div>
+                    <div class="accordion-content"><div id="avgDuration" style="font-weight:600;color:#333"></div></div>
                 </div>
             `;
 
