@@ -901,47 +901,31 @@
                     <canvas id="chartHeuresOUT"></canvas>
                 </div>
                 <div style="margin-top: 30px">
-                    <h4 style="margin-bottom:10px;color:#333"><i class="fas fa-clock"></i> Profits par heure (OUT)</h4>
-                    <canvas id="chartProfitsHeure"></canvas>
+                    <h4 style="margin-bottom:10px;color:#333"><i class="fas fa-clock"></i> Profits vs Pertes par heure (OUT)</h4>
+                    <canvas id="chartProfitsPertesHeure"></canvas>
                 </div>
                 <div style="margin-top: 30px; display:grid; grid-template-columns:1fr 1fr; gap:20px;">
                     <div>
-                        <h4 style="margin-bottom:10px;color:#333"><i class="fas fa-calendar-day"></i> Profits par jour (0=Lun)</h4>
-                        <canvas id="chartProfitsJour"></canvas>
+                        <h4 style="margin-bottom:10px;color:#333"><i class="fas fa-calendar-day"></i> Profits vs Pertes par jour</h4>
+                        <canvas id="chartProfitsPertesJour"></canvas>
                     </div>
                     <div>
-                        <h4 style="margin-bottom:10px;color:#333"><i class="fas fa-calendar"></i> Profits par mois</h4>
-                        <canvas id="chartProfitsMois"></canvas>
+                        <h4 style="margin-bottom:10px;color:#333"><i class="fas fa-calendar"></i> Profits vs Pertes par mois</h4>
+                        <canvas id="chartProfitsPertesMois"></canvas>
                     </div>
+                </div>
+                <div style="margin-top: 30px">
+                    <h4 style="margin-bottom:10px;color:#333"><i class="fas fa-bullseye"></i> TP vs SL par heure</h4>
+                    <canvas id="chartTPSLHeure"></canvas>
                 </div>
                 <div style="margin-top: 30px; display:grid; grid-template-columns:1fr 1fr; gap:20px;">
                     <div>
-                        <h4 style="margin-bottom:10px;color:#333"><i class="fas fa-bullseye"></i> Nombre de TP par heure</h4>
-                        <canvas id="chartTPHeure"></canvas>
+                        <h4 style="margin-bottom:10px;color:#333"><i class="fas fa-bullseye"></i> TP vs SL par jour</h4>
+                        <canvas id="chartTPSLJour"></canvas>
                     </div>
                     <div>
-                        <h4 style="margin-bottom:10px;color:#333"><i class="fas fa-times-circle"></i> Nombre de SL par heure</h4>
-                        <canvas id="chartSLHeure"></canvas>
-                    </div>
-                </div>
-                <div style="margin-top: 30px; display:grid; grid-template-columns:1fr 1fr; gap:20px;">
-                    <div>
-                        <h4 style="margin-bottom:10px;color:#333"><i class="fas fa-bullseye"></i> Nombre de TP par jour</h4>
-                        <canvas id="chartTPJour"></canvas>
-                    </div>
-                    <div>
-                        <h4 style="margin-bottom:10px;color:#333"><i class="fas fa-times-circle"></i> Nombre de SL par jour</h4>
-                        <canvas id="chartSLJour"></canvas>
-                    </div>
-                </div>
-                <div style="margin-top: 30px; display:grid; grid-template-columns:1fr 1fr; gap:20px;">
-                    <div>
-                        <h4 style="margin-bottom:10px;color:#333"><i class="fas fa-bullseye"></i> Nombre de TP par mois</h4>
-                        <canvas id="chartTPMois"></canvas>
-                    </div>
-                    <div>
-                        <h4 style="margin-bottom:10px;color:#333"><i class="fas fa-times-circle"></i> Nombre de SL par mois</h4>
-                        <canvas id="chartSLMois"></canvas>
+                        <h4 style="margin-bottom:10px;color:#333"><i class="fas fa-bullseye"></i> TP vs SL par mois</h4>
+                        <canvas id="chartTPSLMois"></canvas>
                     </div>
                 </div>
                 <div style="margin-top: 30px">
@@ -1092,35 +1076,53 @@
                 }
             });
 
-            // Profits par heure
-            const ph = stats.profits_par_heure_out || {};
-            const dataPh = hours.map(h => ph[h] || 0);
-            const ctxPH = document.getElementById('chartProfitsHeure').getContext('2d');
-            new Chart(ctxPH, {
+            // Profits vs Pertes par heure
+            const ph_pos = stats.profits_pos_par_heure_out || {};
+            const ph_neg = stats.pertes_abs_par_heure_out || stats.pertes_par_heure_out || {};
+            const ctxPPH = document.getElementById('chartProfitsPertesHeure').getContext('2d');
+            new Chart(ctxPPH, {
                 type: 'bar',
-                data: { labels: hours.map(h => `${h}h`), datasets: [{ label: 'Profit (€)', data: dataPh, backgroundColor: 'rgba(118,75,162,0.6)' }] },
+                data: {
+                    labels: hours.map(h => `${h}h`),
+                    datasets: [
+                        { label: 'Profits (≥0)', data: hours.map(h => ph_pos[h] || 0), backgroundColor: 'rgba(86,171,47,0.7)' },
+                        { label: 'Pertes (≤0)', data: hours.map(h => ph_neg[h] || 0), backgroundColor: 'rgba(229,62,62,0.7)' }
+                    ]
+                },
                 options: { responsive: true, scales: { y: { beginAtZero: true } } }
             });
 
-            // Profits par jour (0-6)
+            // Profits vs pertes par jour
             const jours = [0,1,2,3,4,5,6];
-            const pj = stats.profits_par_jour_out || {};
-            const dataPj = jours.map(j => pj[j] || 0);
-            const ctxPJ = document.getElementById('chartProfitsJour').getContext('2d');
-            new Chart(ctxPJ, {
+            const pj_pos = stats.profits_pos_par_jour_out || {};
+            const pj_neg = stats.pertes_abs_par_jour_out || stats.pertes_par_jour_out || {};
+            const ctxPPJ = document.getElementById('chartProfitsPertesJour').getContext('2d');
+            new Chart(ctxPPJ, {
                 type: 'bar',
-                data: { labels: ['Lun','Mar','Mer','Jeu','Ven','Sam','Dim'], datasets: [{ label: 'Profit (€)', data: dataPj, backgroundColor: 'rgba(102,126,234,0.6)' }] },
+                data: {
+                    labels: ['Lun','Mar','Mer','Jeu','Ven','Sam','Dim'],
+                    datasets: [
+                        { label: 'Profits (≥0)', data: jours.map(j => pj_pos[j] || 0), backgroundColor: 'rgba(86,171,47,0.7)' },
+                        { label: 'Pertes (≤0)', data: jours.map(j => pj_neg[j] || 0), backgroundColor: 'rgba(229,62,62,0.7)' }
+                    ]
+                },
                 options: { responsive: true, scales: { y: { beginAtZero: true } } }
             });
 
-            // Profits par mois (1-12)
+            // Profits vs pertes par mois
             const mois = [1,2,3,4,5,6,7,8,9,10,11,12];
-            const pm = stats.profits_par_mois_out || {};
-            const dataPm = mois.map(m => pm[m] || 0);
-            const ctxPM = document.getElementById('chartProfitsMois').getContext('2d');
-            new Chart(ctxPM, {
+            const pm_pos = stats.profits_pos_par_mois_out || {};
+            const pm_neg = stats.pertes_abs_par_mois_out || stats.pertes_par_mois_out || {};
+            const ctxPPM = document.getElementById('chartProfitsPertesMois').getContext('2d');
+            new Chart(ctxPPM, {
                 type: 'bar',
-                data: { labels: ['Jan','Fév','Mar','Avr','Mai','Juin','Juil','Aoû','Sep','Oct','Nov','Déc'], datasets: [{ label: 'Profit (€)', data: dataPm, backgroundColor: 'rgba(86,171,47,0.6)' }] },
+                data: {
+                    labels: ['Jan','Fév','Mar','Avr','Mai','Juin','Juil','Aoû','Sep','Oct','Nov','Déc'],
+                    datasets: [
+                        { label: 'Profits (≥0)', data: mois.map(m => pm_pos[m] || 0), backgroundColor: 'rgba(86,171,47,0.7)' },
+                        { label: 'Pertes (≤0)', data: mois.map(m => pm_neg[m] || 0), backgroundColor: 'rgba(229,62,62,0.7)' }
+                    ]
+                },
                 options: { responsive: true, scales: { y: { beginAtZero: true } } }
             });
 
@@ -1139,90 +1141,47 @@
                 }
             }
 
-            // TP/SL charts
+            // TP vs SL par heure
             const tp_h = stats.tp_par_heure || {}, sl_h = stats.sl_par_heure || {};
-            const ctxTPH = document.getElementById('chartTPHeure').getContext('2d');
-            new Chart(ctxTPH, {
+            const ctxTPSLH = document.getElementById('chartTPSLHeure').getContext('2d');
+            new Chart(ctxTPSLH, {
                 type: 'bar',
                 data: {
                     labels: hours.map(h => `${h}h`),
-                    datasets: [{
-                        label: 'TP (nb)',
-                        data: hours.map(h => tp_h[h] || 0),
-                        backgroundColor: 'rgba(86,171,47,0.7)'
-                    }]
-                },
-                options: { responsive: true, scales: { y: { beginAtZero: true } } }
-            });
-            
-            const ctxSLH = document.getElementById('chartSLHeure').getContext('2d');
-            new Chart(ctxSLH, {
-                type: 'bar',
-                data: {
-                    labels: hours.map(h => `${h}h`),
-                    datasets: [{
-                        label: 'SL (nb)',
-                        data: hours.map(h => sl_h[h] || 0),
-                        backgroundColor: 'rgba(229,62,62,0.7)'
-                    }]
+                    datasets: [
+                        { label: 'TP (nb)', data: hours.map(h => tp_h[h] || 0), backgroundColor: 'rgba(86,171,47,0.7)' },
+                        { label: 'SL (nb)', data: hours.map(h => sl_h[h] || 0), backgroundColor: 'rgba(229,62,62,0.7)' }
+                    ]
                 },
                 options: { responsive: true, scales: { y: { beginAtZero: true } } }
             });
 
             const tp_d = stats.tp_par_jour || {}, sl_d = stats.sl_par_jour || {};
-            const ctxTPD = document.getElementById('chartTPJour').getContext('2d');
-            new Chart(ctxTPD, {
+            // TP vs SL par jour
+            const ctxTPSLJ = document.getElementById('chartTPSLJour').getContext('2d');
+            new Chart(ctxTPSLJ, {
                 type: 'bar',
                 data: {
                     labels: ['Lun','Mar','Mer','Jeu','Ven','Sam','Dim'],
-                    datasets: [{
-                        label: 'TP (nb)',
-                        data: jours.map(j => tp_d[j] || 0),
-                        backgroundColor: 'rgba(86,171,47,0.7)'
-                    }]
-                },
-                options: { responsive: true, scales: { y: { beginAtZero: true } } }
-            });
-            
-            const ctxSLD = document.getElementById('chartSLJour').getContext('2d');
-            new Chart(ctxSLD, {
-                type: 'bar',
-                data: {
-                    labels: ['Lun','Mar','Mer','Jeu','Ven','Sam','Dim'],
-                    datasets: [{
-                        label: 'SL (nb)',
-                        data: jours.map(j => sl_d[j] || 0),
-                        backgroundColor: 'rgba(229,62,62,0.7)'
-                    }]
+                    datasets: [
+                        { label: 'TP (nb)', data: jours.map(j => tp_d[j] || 0), backgroundColor: 'rgba(86,171,47,0.7)' },
+                        { label: 'SL (nb)', data: jours.map(j => sl_d[j] || 0), backgroundColor: 'rgba(229,62,62,0.7)' }
+                    ]
                 },
                 options: { responsive: true, scales: { y: { beginAtZero: true } } }
             });
 
             const tp_m = stats.tp_par_mois || {}, sl_m = stats.sl_par_mois || {};
-            const ctxTPM = document.getElementById('chartTPMois').getContext('2d');
-            new Chart(ctxTPM, {
+            // TP vs SL par mois
+            const ctxTPSLM = document.getElementById('chartTPSLMois').getContext('2d');
+            new Chart(ctxTPSLM, {
                 type: 'bar',
                 data: {
                     labels: ['Jan','Fév','Mar','Avr','Mai','Juin','Juil','Aoû','Sep','Oct','Nov','Déc'],
-                    datasets: [{
-                        label: 'TP (nb)',
-                        data: [1,2,3,4,5,6,7,8,9,10,11,12].map(m => tp_m[m] || 0),
-                        backgroundColor: 'rgba(86,171,47,0.7)'
-                    }]
-                },
-                options: { responsive: true, scales: { y: { beginAtZero: true } } }
-            });
-            
-            const ctxSLM = document.getElementById('chartSLMois').getContext('2d');
-            new Chart(ctxSLM, {
-                type: 'bar',
-                data: {
-                    labels: ['Jan','Fév','Mar','Avr','Mai','Juin','Juil','Aoû','Sep','Oct','Nov','Déc'],
-                    datasets: [{
-                        label: 'SL (nb)',
-                        data: [1,2,3,4,5,6,7,8,9,10,11,12].map(m => sl_m[m] || 0),
-                        backgroundColor: 'rgba(229,62,62,0.7)'
-                    }]
+                    datasets: [
+                        { label: 'TP (nb)', data: [1,2,3,4,5,6,7,8,9,10,11,12].map(m => tp_m[m] || 0), backgroundColor: 'rgba(86,171,47,0.7)' },
+                        { label: 'SL (nb)', data: [1,2,3,4,5,6,7,8,9,10,11,12].map(m => sl_m[m] || 0), backgroundColor: 'rgba(229,62,62,0.7)' }
+                    ]
                 },
                 options: { responsive: true, scales: { y: { beginAtZero: true } } }
             });
@@ -1238,4 +1197,5 @@
         }
     </script>
 </body>
+</html>
 </html>

@@ -916,17 +916,43 @@ class TradingAnalyzer:
         jours_index = pd.Index(range(7), name="Jour")
         mois_index = pd.Index(range(1, 13), name="Mois")
         if len(df_out) > 0:
+            # Sommes nettes (peuvent masquer des pertes si positives)
             profits_par_heure = df_out.groupby(df_out["Datetime"].dt.hour)["Profit"].sum().sort_index().reindex(heures_index, fill_value=0.0)
             profits_par_jour = df_out.groupby(df_out["Datetime"].dt.dayofweek)["Profit"].sum().sort_index().reindex(jours_index, fill_value=0.0)
             profits_par_mois = df_out.groupby(df_out["Datetime"].dt.month)["Profit"].sum().sort_index().reindex(mois_index, fill_value=0.0)
+
+            # Séparer correctement: somme des profits positifs uniquement et somme ABS des pertes uniquement
+            df_pos = df_out[df_out["Profit"] > 0]
+            df_neg = df_out[df_out["Profit"] < 0]
+
+            profits_pos_h = df_pos.groupby(df_pos["Datetime"].dt.hour)["Profit"].sum().sort_index().reindex(heures_index, fill_value=0.0)
+            pertes_abs_h = (-df_neg.groupby(df_neg["Datetime"].dt.hour)["Profit"].sum()).sort_index().reindex(heures_index, fill_value=0.0)
+
+            profits_pos_d = df_pos.groupby(df_pos["Datetime"].dt.dayofweek)["Profit"].sum().sort_index().reindex(jours_index, fill_value=0.0)
+            pertes_abs_d = (-df_neg.groupby(df_neg["Datetime"].dt.dayofweek)["Profit"].sum()).sort_index().reindex(jours_index, fill_value=0.0)
+
+            profits_pos_m = df_pos.groupby(df_pos["Datetime"].dt.month)["Profit"].sum().sort_index().reindex(mois_index, fill_value=0.0)
+            pertes_abs_m = (-df_neg.groupby(df_neg["Datetime"].dt.month)["Profit"].sum()).sort_index().reindex(mois_index, fill_value=0.0)
         else:
             profits_par_heure = pd.Series(0.0, index=heures_index, dtype=float)
             profits_par_jour = pd.Series(0.0, index=jours_index, dtype=float)
             profits_par_mois = pd.Series(0.0, index=mois_index, dtype=float)
+            profits_pos_h = profits_par_heure.copy()
+            pertes_abs_h = profits_par_heure.copy()
+            profits_pos_d = profits_par_jour.copy()
+            pertes_abs_d = profits_par_jour.copy()
+            profits_pos_m = profits_par_mois.copy()
+            pertes_abs_m = profits_par_mois.copy()
 
         result["profits_par_heure_out"] = profits_par_heure
         result["profits_par_jour_out"] = profits_par_jour
         result["profits_par_mois_out"] = profits_par_mois
+        result["profits_pos_par_heure_out"] = profits_pos_h
+        result["pertes_abs_par_heure_out"] = pertes_abs_h
+        result["profits_pos_par_jour_out"] = profits_pos_d
+        result["pertes_abs_par_jour_out"] = pertes_abs_d
+        result["profits_pos_par_mois_out"] = profits_pos_m
+        result["pertes_abs_par_mois_out"] = pertes_abs_m
 
         # Identifier best/worst heures/jours/mois
         def _best_worst(series):
@@ -1866,6 +1892,8 @@ class TradingAnalyzer:
                 ws_charts.cell(row=row_ptr6, column=3, value=int(sl_h.get(h, 0)))
                 row_ptr6 += 1
             chart_tpsl_h = BarChart()
+            chart_tpsl_h.type = "col"
+            chart_tpsl_h.grouping = "clustered"  # barres groupées TP vs SL
             chart_tpsl_h.title = "Nombre de TP/SL par heure (au dernier OUT)"
             chart_tpsl_h.y_axis.title = "Nombre"
             chart_tpsl_h.x_axis.title = "Heure (0-23)"
@@ -1893,6 +1921,8 @@ class TradingAnalyzer:
                 ws_charts.cell(row=row_ptr7, column=3, value=int(sl_d.get(d, 0)))
                 row_ptr7 += 1
             chart_tpsl_d = BarChart()
+            chart_tpsl_d.type = "col"
+            chart_tpsl_d.grouping = "clustered"
             chart_tpsl_d.title = "Nombre de TP/SL par jour"
             chart_tpsl_d.y_axis.title = "Nombre"
             chart_tpsl_d.x_axis.title = "Jour de la semaine"
@@ -1920,6 +1950,8 @@ class TradingAnalyzer:
                 ws_charts.cell(row=row_ptr8, column=3, value=int(sl_m.get(m, 0)))
                 row_ptr8 += 1
             chart_tpsl_m = BarChart()
+            chart_tpsl_m.type = "col"
+            chart_tpsl_m.grouping = "clustered"
             chart_tpsl_m.title = "Nombre de TP/SL par mois"
             chart_tpsl_m.y_axis.title = "Nombre"
             chart_tpsl_m.x_axis.title = "Mois de l'année"
@@ -1931,6 +1963,101 @@ class TradingAnalyzer:
             chart_tpsl_m.height = 12
             chart_tpsl_m.width = 25
             ws_charts.add_chart(chart_tpsl_m, "E200")
+
+            # === SECTION 11: PROFITS VS PERTES GROUPÉS ===
+            # Ancrage dynamique pour éviter tout chevauchement avec les sections précédentes
+            base_anchor = max(ws_charts.max_row + 5, 260)
+            # Heures
+            start = base_anchor
+            ws_charts[f'A{start}'] = "💰 PROFITS VS PERTES PAR HEURE (OUT)"
+            ws_charts[f'A{start}'].font = Font(bold=True, color="366092", size=14)
+            ws_charts[f'A{start+2}'] = "Heure"
+            ws_charts[f'B{start+2}'] = "Profits (≥0)"
+            ws_charts[f'C{start+2}'] = "Pertes (≤0)"
+            rowp = start + 3
+            profits_pos_h = aggs.get("profits_pos_par_heure_out")
+            pertes_h = aggs.get("pertes_abs_par_heure_out")
+            for h in range(24):
+                ws_charts.cell(row=rowp, column=1, value=h)
+                ws_charts.cell(row=rowp, column=2, value=float(round(float(profits_pos_h.get(h, 0.0)), 2)))
+                ws_charts.cell(row=rowp, column=3, value=float(round(float(pertes_h.get(h, 0.0)), 2)))
+                rowp += 1
+            chart_ph_group = BarChart()
+            chart_ph_group.type = "col"
+            chart_ph_group.grouping = "clustered"
+            chart_ph_group.title = "Profits vs Pertes par heure (OUT)"
+            chart_ph_group.y_axis.title = "Montant (€)"
+            chart_ph_group.x_axis.title = "Heure (0-23)"
+            data = Reference(ws_charts, min_col=2, min_row=start+2, max_col=3, max_row=rowp-1)
+            cats = Reference(ws_charts, min_col=1, min_row=start+3, max_row=rowp-1)
+            chart_ph_group.add_data(data, titles_from_data=True)
+            chart_ph_group.set_categories(cats)
+            chart_ph_group.legend.position = 'b'
+            chart_ph_group.height = 12
+            chart_ph_group.width = 25
+            ws_charts.add_chart(chart_ph_group, f"E{start}")
+
+            # Jours
+            start2 = max(ws_charts.max_row + 5, rowp + 15)
+            ws_charts[f'A{start2}'] = "💰 PROFITS VS PERTES PAR JOUR (OUT)"
+            ws_charts[f'A{start2}'].font = Font(bold=True, color="366092", size=14)
+            ws_charts[f'A{start2+2}'] = "Jour"
+            ws_charts[f'B{start2+2}'] = "Profits (≥0)"
+            ws_charts[f'C{start2+2}'] = "Pertes (≤0)"
+            rowp2 = start2 + 3
+            profits_pos_d = aggs.get("profits_pos_par_jour_out")
+            pertes_d = aggs.get("pertes_abs_par_jour_out")
+            jours_noms = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim']
+            for d in range(7):
+                ws_charts.cell(row=rowp2, column=1, value=jours_noms[d])
+                ws_charts.cell(row=rowp2, column=2, value=float(round(float(profits_pos_d.get(d, 0.0)), 2)))
+                ws_charts.cell(row=rowp2, column=3, value=float(round(float(pertes_d.get(d, 0.0)), 2)))
+                rowp2 += 1
+            chart_pd_group = BarChart()
+            chart_pd_group.type = "col"
+            chart_pd_group.grouping = "clustered"
+            chart_pd_group.title = "Profits vs Pertes par jour (OUT)"
+            chart_pd_group.y_axis.title = "Montant (€)"
+            chart_pd_group.x_axis.title = "Jour de la semaine"
+            data = Reference(ws_charts, min_col=2, min_row=start2+2, max_col=3, max_row=rowp2-1)
+            cats = Reference(ws_charts, min_col=1, min_row=start2+3, max_row=rowp2-1)
+            chart_pd_group.add_data(data, titles_from_data=True)
+            chart_pd_group.set_categories(cats)
+            chart_pd_group.legend.position = 'b'
+            chart_pd_group.height = 12
+            chart_pd_group.width = 25
+            ws_charts.add_chart(chart_pd_group, f"E{start2}")
+
+            # Mois
+            start3 = max(ws_charts.max_row + 5, rowp2 + 15)
+            ws_charts[f'A{start3}'] = "💰 PROFITS VS PERTES PAR MOIS (OUT)"
+            ws_charts[f'A{start3}'].font = Font(bold=True, color="366092", size=14)
+            ws_charts[f'A{start3+2}'] = "Mois"
+            ws_charts[f'B{start3+2}'] = "Profits (≥0)"
+            ws_charts[f'C{start3+2}'] = "Pertes (≤0)"
+            rowp3 = start3 + 3
+            profits_pos_m = aggs.get("profits_pos_par_mois_out")
+            pertes_m = aggs.get("pertes_abs_par_mois_out")
+            mois_noms = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Juin', 'Juil', 'Aoû', 'Sep', 'Oct', 'Nov', 'Déc']
+            for m in range(1, 13):
+                ws_charts.cell(row=rowp3, column=1, value=mois_noms[m-1])
+                ws_charts.cell(row=rowp3, column=2, value=float(round(float(profits_pos_m.get(m, 0.0)), 2)))
+                ws_charts.cell(row=rowp3, column=3, value=float(round(float(pertes_m.get(m, 0.0)), 2)))
+                rowp3 += 1
+            chart_pm_group = BarChart()
+            chart_pm_group.type = "col"
+            chart_pm_group.grouping = "clustered"
+            chart_pm_group.title = "Profits vs Pertes par mois (OUT)"
+            chart_pm_group.y_axis.title = "Montant (€)"
+            chart_pm_group.x_axis.title = "Mois de l'année"
+            data = Reference(ws_charts, min_col=2, min_row=start3+2, max_col=3, max_row=rowp3-1)
+            cats = Reference(ws_charts, min_col=1, min_row=start3+3, max_row=rowp3-1)
+            chart_pm_group.add_data(data, titles_from_data=True)
+            chart_pm_group.set_categories(cats)
+            chart_pm_group.legend.position = 'b'
+            chart_pm_group.height = 12
+            chart_pm_group.width = 25
+            ws_charts.add_chart(chart_pm_group, f"E{start3}")
 
             # === SECTION 10: ÉVOLUTION DE LA SOMME CUMULÉE ===
             ws_charts['A220'] = "📈 ÉVOLUTION DE LA SOMME CUMULÉE"
