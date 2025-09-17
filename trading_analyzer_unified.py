@@ -1144,13 +1144,17 @@ class TradingAnalyzer:
 
         return result
 
-    def calculer_patterns(self, df: pd.DataFrame, min_support: float = 0.03, min_confidence: float = 0.55, top_k: int = 10):
-        """MVP: Détecte des patterns (itemsets 1-2) et génère des règles vers TP/SL.
+    def calculer_patterns(self, df: pd.DataFrame, min_support: float = 0.03, min_confidence: float = 0.55, top_k: int = 10, n_permutations: int = 200, max_itemset_size: int = 3):
+        """Détecte des patterns (itemsets 1-2) et génère des règles vers TP/SL avec p-values.
 
-        - Regroupe les lignes par trade complet (Cle_Match)
-        - Extrait un ensemble d'items catégoriels simples par trade
-        - Calcule support, confidence(X⇒TP/SL) et lift par rapport au taux de base
-        - Retourne Top K favorables (vers TP) et défavorables (vers SL)
+        Contraintes d'items (plus intuitives):
+        - Durée du trade (IN -> dernier OUT): buckets {D<30m, D30-120m, >120m}
+        - Sens (buy/sell)
+        - Heure d'ouverture (buckets {H[0-7], H[8-11], H[12-15], H[16-19], H[20-23]})
+        - Session d'ouverture {Asie, Europe, Amérique}
+
+        Calculs retournés pour chaque règle Items ⇒ TP (ou SL):
+        - count, support, confidence, lift, p_value (test permutation sur la confidence)
         """
         results = {"top_tp": [], "top_sl": []}
         if "Cle_Match" not in df.columns or len(df) == 0:
@@ -1216,7 +1220,13 @@ class TradingAnalyzer:
                 return "D<30m"
             if m <= 120:
                 return "D30-120m"
-            return ">120m"
+            if m <= 360:  # 2h-6h
+                return "D2-6h"
+            if m <= 720:  # 6h-12h
+                return "D6-12h"
+            if m <= 1440:  # 12h-24h
+                return "D12-24h"
+            return ">24h"
 
         def bucket_outs(n):
             try:
@@ -1231,20 +1241,19 @@ class TradingAnalyzer:
 
         trades["Heure_Bucket"] = trades["Heure_IN"].apply(bucket_hour)
         trades["Duree_Bucket"] = trades["Duree_min"].apply(bucket_duration)
+        # NOTE: on n'utilise plus OUTS_Bucket dans les items (simplification demandée)
         trades["OUTS_Bucket"] = trades["Nb_OUTs"].apply(bucket_outs)
         trades["Result"] = trades["Profit_Trade"].apply(lambda x: "TP" if x > 0 else ("SL" if x < 0 else "NEUTRE"))
 
         # Ensemble d'items
         def items_for_row(r):
             items = set()
-            if pd.notna(r.get("Symbole_ordre")):
-                items.add(f"PAIR={str(r['Symbole_ordre']).upper()}")
+            # Seuls les 4 attributs demandés
             if pd.notna(r.get("Type_ordre")):
                 items.add(f"DIR={str(r['Type_ordre']).lower()}")
             items.add(f"SESSION={r['Session_IN']}")
             items.add(f"{r['Heure_Bucket']}")
             items.add(f"{r['Duree_Bucket']}")
-            items.add(f"{r['OUTS_Bucket']}")
             return items
 
         trades["Items"] = trades.apply(items_for_row, axis=1)
@@ -1261,6 +1270,9 @@ class TradingAnalyzer:
         count_2 = Counter()
         count_2_tp = Counter()
         count_2_sl = Counter()
+        count_3 = Counter()
+        count_3_tp = Counter()
+        count_3_sl = Counter()
 
         for _, r in trades.iterrows():
             items = sorted(list(r["Items"]))
@@ -1281,6 +1293,17 @@ class TradingAnalyzer:
                         count_2_tp[pair] += 1
                     elif res == "SL":
                         count_2_sl[pair] += 1
+            # size-3 (au plus 4 items donc ≤ 4 combinaisons par trade)
+            if max_itemset_size >= 3 and len(items) >= 3:
+                for i in range(len(items)):
+                    for j in range(i+1, len(items)):
+                        for k in range(j+1, len(items)):
+                            trip = (items[i], items[j], items[k])
+                            count_3[trip] += 1
+                            if res == "TP":
+                                count_3_tp[trip] += 1
+                            elif res == "SL":
+                                count_3_sl[trip] += 1
 
         def build_rows(counter_all, counter_pos, baseline):
             rows = []
@@ -1305,14 +1328,261 @@ class TradingAnalyzer:
 
         top_tp = build_rows(count_1, count_1_tp, base_tp) + build_rows(count_2, count_2_tp, base_tp)
         top_sl = build_rows(count_1, count_1_sl, base_sl) + build_rows(count_2, count_2_sl, base_sl)
+        if max_itemset_size >= 3:
+            top_tp += build_rows(count_3, count_3_tp, base_tp)
+            top_sl += build_rows(count_3, count_3_sl, base_sl)
 
-        # Garder top_k au global après concat
-        top_tp = sorted(top_tp, key=lambda x: (x["lift"], x["support"]), reverse=True)[:top_k]
-        top_sl = sorted(top_sl, key=lambda x: (x["lift"], x["support"]), reverse=True)[:top_k]
+        # Garder top_k au global après concat (tri provisoire, la p-value sera ajoutée ensuite)
+        top_tp = sorted(top_tp, key=lambda x: (x["lift"], x["support"]), reverse=True)[: top_k * 3]
+        top_sl = sorted(top_sl, key=lambda x: (x["lift"], x["support"]), reverse=True)[: top_k * 3]
+
+        # === p-values par permutation sur la confidence ===
+        import numpy as np
+
+        def compute_confidence_for_items(items_set, target):
+            mask = trades["Items"].apply(lambda s: items_set.issubset(s))
+            cnt = int(mask.sum())
+            if cnt == 0:
+                return 0.0, cnt
+            conf = float((trades.loc[mask, "Result"] == target).mean())
+            return conf, cnt
+
+        def permutation_p_value(items_str, target, observed_conf):
+            # Reconstruire l'ensemble d'items
+            items_set = set([s.strip() for s in items_str.split("&")]) if "&" in items_str else {items_str}
+            items_set = {s.strip() for s in items_set}
+            mask = trades["Items"].apply(lambda s: items_set.issubset(s))
+            cnt = int(mask.sum())
+            if cnt == 0:
+                return 1.0
+            y = trades["Result"].values
+            idx = np.where(mask.values)[0]
+            if len(idx) == 0:
+                return 1.0
+            successes = (y[idx] == target).sum()
+            # Si peu d'observations, garder p=1 par prudence
+            if cnt < 10:
+                return 1.0
+            more_extreme = 0
+            for _ in range(int(max(10, n_permutations))):
+                y_perm = np.random.permutation(y)
+                conf_perm = (y_perm[idx] == target).mean()
+                if conf_perm >= observed_conf:
+                    more_extreme += 1
+            pval = (more_extreme + 1) / (n_permutations + 1)
+            return float(round(pval, 4))
+
+        for row in top_tp:
+            row["p_value"] = permutation_p_value(row["items"], "TP", row["confidence"])
+        for row in top_sl:
+            row["p_value"] = permutation_p_value(row["items"], "SL", row["confidence"])
+
+        # Correction des tests multiples (FDR Benjamini–Hochberg) et nouveau classement
+        def fdr_bh(rows):
+            ps = [r.get("p_value", 1.0) for r in rows]
+            m = max(len(ps), 1)
+            order = np.argsort(ps)
+            qvals = [1.0] * len(ps)
+            min_q = 1.0
+            for rank, idx in enumerate(order, start=1):
+                p = ps[idx]
+                q = p * m / rank
+                if q < min_q:
+                    min_q = q
+                qvals[idx] = min_q
+            for i, r in enumerate(rows):
+                r["q_value"] = float(round(min(qvals[i], 1.0), 4))
+            return rows
+
+        top_tp = fdr_bh(top_tp)
+        top_sl = fdr_bh(top_sl)
+
+        # Reclasser: p-value croissante, puis q-value, puis lift décroissant, support décroissant
+        top_tp = sorted(top_tp, key=lambda x: (x.get("p_value", 1.0), x.get("q_value", 1.0), -x["lift"], -x["support"]))[:top_k]
+        top_sl = sorted(top_sl, key=lambda x: (x.get("p_value", 1.0), x.get("q_value", 1.0), -x["lift"], -x["support"]))[:top_k]
 
         results["top_tp"] = top_tp
         results["top_sl"] = top_sl
         return results
+
+    def calculer_modele_influence(self, df: pd.DataFrame, include_interactions: bool = True, top_k: int = 20):
+        """Modèle logistique sans a priori pour TP (1) vs SL (0) avec interactions.
+
+        Retourne un DataFrame avec colonnes: feature, coef, odds_ratio, p_value.
+        """
+        try:
+            import numpy as np
+            import pandas as pd
+            import statsmodels.api as sm
+            backend = "statsmodels"
+        except Exception as e:
+            print(f"[WARNING] statsmodels not available: {e}")
+            backend = "sklearn"
+
+        if "Cle_Match" not in df.columns or len(df) == 0:
+            return pd.DataFrame()
+
+        data = df.copy()
+        data["Datetime"] = pd.to_datetime(data.get("Heure d'ouverture"), errors='coerce')
+        data = data[data["Datetime"].notna()]
+        df_in = data[data["Direction"] == "in"].copy()
+        df_out = data[data["Direction"] == "out"].copy()
+        if len(df_in) == 0 or len(df_out) == 0:
+            return pd.DataFrame()
+
+        first_in = df_in.sort_values(["Cle_Match","Datetime"]).groupby("Cle_Match").head(1)
+        last_out = df_out.sort_values(["Cle_Match","Datetime"]).groupby("Cle_Match").tail(1)
+        profit_par_trade = data.groupby("Cle_Match")["Profit"].sum()
+
+        trades = first_in[["Cle_Match","Type_ordre","Datetime"]].rename(columns={"Datetime":"InTime"}).copy()
+        trades = trades.merge(last_out[["Cle_Match","Datetime"]].rename(columns={"Datetime":"OutTime"}), on="Cle_Match", how="inner")
+        trades["Profit_Trade"] = trades["Cle_Match"].map(profit_par_trade)
+
+        def heure_to_session(h):
+            if 0 <= h <= 7:
+                return "Asie"
+            if 8 <= h <= 15:
+                return "Europe"
+            return "Amérique"
+
+        trades["Session_IN"] = trades["InTime"].dt.hour.apply(heure_to_session)
+        trades["Heure_IN"] = trades["InTime"].dt.hour
+        trades["Duree_min"] = (trades["OutTime"] - trades["InTime"]).dt.total_seconds() / 60.0
+
+        def bucket_hour(h):
+            try:
+                h = int(h)
+            except Exception:
+                return "HNA"
+            if h < 8:
+                return "H[0-7]"
+            if h < 12:
+                return "H[8-11]"
+            if h < 16:
+                return "H[12-15]"
+            if h < 20:
+                return "H[16-19]"
+            return "H[20-23]"
+
+        def bucket_duration(m):
+            try:
+                m = float(m)
+            except Exception:
+                return "DUR_NA"
+            if m < 30:
+                return "D<30m"
+            if m <= 120:
+                return "D30-120m"
+            if m <= 360:
+                return "D2-6h"
+            if m <= 720:
+                return "D6-12h"
+            if m <= 1440:
+                return "D12-24h"
+            return ">24h"
+
+        trades["Heure_Bucket"] = trades["Heure_IN"].apply(bucket_hour)
+        trades["Duree_Bucket"] = trades["Duree_min"].apply(bucket_duration)
+        trades["y"] = trades["Profit_Trade"].apply(lambda x: 1 if x > 0 else (0 if x < 0 else np.nan))
+        trades = trades[trades["y"].notna()]
+
+        X = pd.get_dummies(trades[["Type_ordre","Session_IN","Heure_Bucket","Duree_Bucket"]], drop_first=True)
+        if include_interactions:
+            # Interactions pairwise: créer manuellement pour lisibilité
+            cols = list(X.columns)
+            for i in range(len(cols)):
+                for j in range(i+1, len(cols)):
+                    X[f"{cols[i]}*{cols[j]}"] = X[cols[i]] * X[cols[j]]
+
+        y = trades["y"].astype(int)
+        if backend == "statsmodels":
+            X_sm = sm.add_constant(X, has_constant='add')
+            try:
+                model = sm.Logit(y, X_sm).fit(disp=False, maxiter=200)
+            except Exception as e:
+                print(f"[WARNING] Logit failed: {e}")
+                return pd.DataFrame()
+
+            params = model.params
+            pvalues = model.pvalues
+            oratios = np.exp(params)
+            res_df = pd.DataFrame({
+                "feature": params.index,
+                "coef": params.values,
+                "odds_ratio": oratios.values,
+                "p_value": pvalues.values
+            })
+            res_df = res_df[res_df["feature"] != "const"].copy()
+            res_df["odds_ratio"] = res_df["odds_ratio"].round(3)
+            res_df["coef"] = res_df["coef"].round(4)
+            res_df["p_value"] = res_df["p_value"].round(4)
+            res_df = res_df.sort_values(["p_value", "odds_ratio"], ascending=[True, False]).head(top_k)
+            return res_df
+        else:
+            try:
+                from sklearn.linear_model import LogisticRegression
+            except Exception as e:
+                print(f"[WARNING] sklearn not available: {e}")
+                # Fallback sans dépendances: tests bi-variés par variable (2-proportions z-test)
+                import math
+                rows = []
+                for col in X.columns:
+                    try:
+                        mask1 = X[col] == 1
+                        mask0 = X[col] == 0
+                        n1 = int(mask1.sum())
+                        n0 = int(mask0.sum())
+                        if n1 == 0 or n0 == 0:
+                            continue
+                        y1 = int(y[mask1].sum())
+                        y0 = int(y[mask0].sum())
+                        p1 = y1 / n1
+                        p0 = y0 / n0
+                        p_pool = (y1 + y0) / (n1 + n0)
+                        se = math.sqrt(max(p_pool * (1 - p_pool) * (1 / n1 + 1 / n0), 1e-12))
+                        z = (p1 - p0) / se if se > 0 else 0.0
+                        # p-value bilatérale via erf
+                        cdf = 0.5 * (1.0 + math.erf(abs(z) / math.sqrt(2)))
+                        pval = float(round(2 * (1 - cdf), 4))
+                        # Odds ratio avec lissage 0.5 (Haldane-Anscombe)
+                        a = y1 + 0.5
+                        b = (n1 - y1) + 0.5
+                        c = y0 + 0.5
+                        d = (n0 - y0) + 0.5
+                        oratio = (a / b) / (c / d)
+                        rows.append({
+                            "feature": col,
+                            "coef": round(p1 - p0, 4),
+                            "odds_ratio": round(oratio, 3),
+                            "p_value": pval
+                        })
+                    except Exception:
+                        continue
+                if not rows:
+                    return pd.DataFrame()
+                res_df = pd.DataFrame(rows).sort_values(["p_value", "odds_ratio"], ascending=[True, False]).head(top_k)
+                return res_df
+
+            model = LogisticRegression(max_iter=200, solver="liblinear")
+            try:
+                model.fit(X, y)
+            except Exception as e:
+                print(f"[WARNING] Sklearn logistic fit failed: {e}")
+                return pd.DataFrame()
+            coefs = model.coef_[0]
+            oratios = np.exp(coefs)
+            res_df = pd.DataFrame({
+                "feature": X.columns,
+                "coef": coefs,
+                "odds_ratio": oratios,
+                "p_value": [None] * len(coefs)
+            })
+            res_df["odds_ratio"] = res_df["odds_ratio"].round(3)
+            res_df["coef"] = res_df["coef"].round(4)
+            # Trier par importance absolue du coef
+            res_df = res_df.reindex(res_df["coef"].abs().sort_values(ascending=False).index)
+            res_df = res_df.head(top_k)
+            return res_df
     
     def create_excel_report(self, df_final, reports_folder, timestamp, filter_type=None):
         """Crée un rapport Excel complet avec graphiques"""
@@ -1997,31 +2267,86 @@ class TradingAnalyzer:
                         except Exception as e:
                             print(f"[WARNING] Session table for instrument {instrument} failed: {e}")
                         
+                        # Bloc Patterns pour cet instrument
+                        try:
+                            patterns_pair = self.calculer_patterns(df_instrument, n_permutations=500)
+                            start_row_patterns = ws_instrument.max_row + 2
+                            ws_instrument[f'A{start_row_patterns}'] = "🧩 PATTERNS (PAIR)"
+                            ws_instrument[f'A{start_row_patterns}'].font = Font(bold=True, color="366092")
+                            headers_p = ["Items", "Count", "Support", "Confidence", "Lift", "p-value", "Signif"]
+                            for i, h in enumerate(headers_p, 0):
+                                cell = ws_instrument.cell(row=start_row_patterns+2, column=1+i, value=h)
+                                cell.font = Font(bold=True, color="FFFFFF")
+                                cell.fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
+                                cell.alignment = Alignment(horizontal="center")
+                            # Favorables
+                            ws_instrument.cell(row=start_row_patterns+3, column=1, value="Favorables (⇒ TP)")
+                            ws_instrument.cell(row=start_row_patterns+3, column=1).font = Font(bold=True)
+                            rowp = start_row_patterns + 4
+                            for r in patterns_pair.get('top_tp', [])[:10]:
+                                ws_instrument.cell(row=rowp, column=1, value=r['items'])
+                                ws_instrument.cell(row=rowp, column=2, value=r['count'])
+                                ws_instrument.cell(row=rowp, column=3, value=r['support'])
+                                ws_instrument.cell(row=rowp, column=4, value=r['confidence'])
+                                ws_instrument.cell(row=rowp, column=5, value=r['lift'])
+                                pval = r.get('p_value')
+                                ws_instrument.cell(row=rowp, column=6, value=pval)
+                                signif = "***" if pval is not None and pval <= 0.01 else "**" if pval is not None and pval <= 0.05 else "*" if pval is not None and pval <= 0.10 else "."
+                                ws_instrument.cell(row=rowp, column=7, value=signif)
+                                rowp += 1
+                            # Défavorable
+                            rowp += 1
+                            ws_instrument.cell(row=rowp, column=1, value="Défavorables (⇒ SL)")
+                            ws_instrument.cell(row=rowp, column=1).font = Font(bold=True)
+                            rowp += 1
+                            for r in patterns_pair.get('top_sl', [])[:10]:
+                                ws_instrument.cell(row=rowp, column=1, value=r['items'])
+                                ws_instrument.cell(row=rowp, column=2, value=r['count'])
+                                ws_instrument.cell(row=rowp, column=3, value=r['support'])
+                                ws_instrument.cell(row=rowp, column=4, value=r['confidence'])
+                                ws_instrument.cell(row=rowp, column=5, value=r['lift'])
+                                pval = r.get('p_value')
+                                ws_instrument.cell(row=rowp, column=6, value=pval)
+                                signif = "***" if pval is not None and pval <= 0.01 else "**" if pval is not None and pval <= 0.05 else "*" if pval is not None and pval <= 0.10 else "."
+                                ws_instrument.cell(row=rowp, column=7, value=signif)
+                                rowp += 1
+                        except Exception as e:
+                            print(f"[WARNING] Pair patterns failed for {instrument}: {e}")
+
                     except Exception as e:
                         print(f"[WARNING] Could not create sheet for {instrument}: {str(e)}")
                         continue
 
-            # === ONGLET 6: PATTERNS (MVP) ===
+            # === ONGLET 6: PATTERNS (MVP étendu) ===
             try:
-                patterns = self.calculer_patterns(df_final)
+                patterns = self.calculer_patterns(df_final, n_permutations=500, max_itemset_size=3)
                 ws_patterns = wb.create_sheet("🧩 Patterns")
                 # Explications
-                ws_patterns['A1'] = "🧩 Détection de patterns (MVP)"
+                ws_patterns['A1'] = "🧩 Détection de patterns (règles d'association)"
                 ws_patterns['A1'].font = Font(bold=True, color="366092", size=14)
                 exp_lines = [
-                    "Items: ensemble d'attributs décrivant un contexte (ex: PAIR=EURUSD, SESSION=Europe, H[8-11], D<30m, OUT=1, DIR=buy).",
+                    "Items utilisés: DIR (buy/sell), SESSION (Asie/Europe/Amérique), heure d'ouverture (H[..]) et durée (D..).",
+                    "DIR=buy/sell: sens d'ouverture du trade.",
+                    "SESSION=Asie/Europe/Amérique: session du marché à l'ouverture (H 0–7 / 8–15 / 16–23).",
+                    "Heure (H[..]): plages horaires d'ouverture: H[0-7], H[8-11], H[12-15], H[16-19], H[20-23].",
+                    "Durée (D..): temps entre IN et dernier OUT: D<30m, D30-120m, D2-6h, D6-12h, D12-24h, >24h.",
                     "Count: nombre de trades contenant le pattern (itemset).",
                     "Support: proportion de trades contenant le pattern = Count / N (N = total de trades complets).",
                     "Confidence: probabilité de TP (ou SL) sachant le pattern = Count(pattern ∪ TP) / Count(pattern).",
                     "Lift: surperformance relative = Confidence / P(TP) (ou / P(SL)). Lift > 1 => pattern informatif.",
+                    "p-value (permutation): probabilité d'obtenir une confidence ≥ observée si la cible (TP/SL) était aléatoire. Plus c'est petit, plus le pattern est significatif.",
+                    "Méthode de permutation (n=500): on mélange aléatoirement les étiquettes TP/SL entre trades, on recalcule la confidence à chaque mélange, la p-value est la part des mélanges ≥ à la confidence observée.",
+                    "q-value (FDR Benjamini–Hochberg): p-value ajustée pour multiplicité. C'est la proportion d'hypothèses fausses attendue parmi les règles déclarées significatives.",
+                    "Interprétation: p≤0.01 (***), p≤0.05 (**), p≤0.10 (*) sinon (.). Ces seuils sont indicatifs, à croiser avec support et lift.",
+                    "But de cette section: proposer des contextes (items) où la probabilité de TP (ou de SL) diffère significativement du taux global.",
                 ]
                 for i, line in enumerate(exp_lines, start=2):
                     ws_patterns[f'A{i}'] = line
                 # Titre bloc TP
                 start_tp_row = len(exp_lines) + 3
-                ws_patterns[f'A{start_tp_row}'] = "TOP PATTERNS FAVORABLES (⇒ TP)"
+                ws_patterns[f'A{start_tp_row}'] = "TOP PATTERNS FAVORABLES (⇒ TP) — triés par p-value"
                 ws_patterns[f'A{start_tp_row}'].font = Font(bold=True, color="366092", size=14)
-                headers = ["Items", "Count", "Support", "Confidence", "Lift"]
+                headers = ["Items", "Count", "Support", "Confidence", "Lift", "p-value", "q-value", "Signif"]
                 for i, h in enumerate(headers, 1):
                     cell = ws_patterns.cell(row=start_tp_row+2, column=i, value=h)
                     cell.font = Font(bold=True, color="FFFFFF")
@@ -2034,6 +2359,11 @@ class TradingAnalyzer:
                     ws_patterns.cell(row=row, column=3, value=r['support'])
                     ws_patterns.cell(row=row, column=4, value=r['confidence'])
                     ws_patterns.cell(row=row, column=5, value=r['lift'])
+                    pval = r.get('p_value')
+                    ws_patterns.cell(row=row, column=6, value=pval)
+                    ws_patterns.cell(row=row, column=7, value=r.get('q_value'))
+                    signif = "***" if pval is not None and pval <= 0.01 else "**" if pval is not None and pval <= 0.05 else "*" if pval is not None and pval <= 0.10 else "."
+                    ws_patterns.cell(row=row, column=8, value=signif)
                     row += 1
 
                 row += 2
@@ -2052,7 +2382,55 @@ class TradingAnalyzer:
                     ws_patterns.cell(row=row, column=3, value=r['support'])
                     ws_patterns.cell(row=row, column=4, value=r['confidence'])
                     ws_patterns.cell(row=row, column=5, value=r['lift'])
+                    pval = r.get('p_value')
+                    ws_patterns.cell(row=row, column=6, value=pval)
+                    ws_patterns.cell(row=row, column=7, value=r.get('q_value'))
+                    signif = "***" if pval is not None and pval <= 0.01 else "**" if pval is not None and pval <= 0.05 else "*" if pval is not None and pval <= 0.10 else "."
+                    ws_patterns.cell(row=row, column=8, value=signif)
                     row += 1
+
+                # Bloc modèle d'influence (logit)
+                try:
+                    ws_patterns.cell(row=row+2, column=1, value="📐 Modèle d'influence (logistique TP vs SL)")
+                    ws_patterns.cell(row=row+2, column=1).font = Font(bold=True, color="366092", size=14)
+                    # Explications du modèle
+                    explain = [
+                        "Feature: variable explicative binaire issue du one-hot encoding (ex: DIR_buy, SESSION_Europe, H[8-11], D2-6h).",
+                        "Interactions: produits de deux features (ex: DIR_buy*SESSION_Europe) pour capturer des effets combinés.",
+                        "Coef: effet (log-odds). Positif → augmente les chances de TP; négatif → augmente les chances de SL.",
+                        "Odds Ratio: exp(coef). >1 → favorable au TP; <1 → défavorable. Ex: 1.30 = +30% sur les odds de TP.",
+                        "p-value: significativité statistique de l'effet (si disponible).",
+                        "Utilité: identifier les paramètres les plus influents globalement, au-delà des règles ponctuelles.",
+                        "",
+                        "Dictionnaire des features (comment lire):",
+                        "- DIR_buy / DIR_sell: sens du trade à l'ouverture (achat/vente).",
+                        "- SESSION_Asie / SESSION_Europe / SESSION_Amérique: session de marché lors de l'ouverture.",
+                        "- H[0-7], H[8-11], H[12-15], H[16-19], H[20-23]: plage horaire d'ouverture du trade (UTC ou heure des données).",
+                        "- D<30m, D30-120m, D2-6h, D6-12h, D12-24h, >24h: durée entre IN et dernier OUT.",
+                        "- A*B (ex: DIR_buy*H[8-11]): effet spécifique quand A et B sont vrais simultanément (interaction).",
+                    ]
+                    for i, line in enumerate(explain, start=1):
+                        ws_patterns.cell(row=row+2+i, column=1, value=line)
+                    infl = self.calculer_modele_influence(df_final)
+                    if not infl.empty:
+                        base_row = row + 2 + len(explain) + 2
+                        headers_m = ["Feature", "Coef", "Odds Ratio", "p-value"]
+                        for i, h in enumerate(headers_m, 1):
+                            cell = ws_patterns.cell(row=base_row, column=i, value=h)
+                            cell.font = Font(bold=True, color="FFFFFF")
+                            cell.fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
+                            cell.alignment = Alignment(horizontal="center")
+                        r0 = base_row + 1
+                        for _, rr in infl.iterrows():
+                            ws_patterns.cell(row=r0, column=1, value=str(rr['feature']))
+                            ws_patterns.cell(row=r0, column=2, value=float(rr['coef']))
+                            ws_patterns.cell(row=r0, column=3, value=float(rr['odds_ratio']))
+                            # p_value peut être None dans certains backends
+                            pv = rr.get('p_value')
+                            ws_patterns.cell(row=r0, column=4, value=(float(pv) if pv is not None else None))
+                            r0 += 1
+                except Exception as e:
+                    print(f"[WARNING] Influence model block failed: {e}")
             except Exception as e:
                 print(f"[WARNING] Patterns sheet creation failed: {e}")
             
