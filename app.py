@@ -74,6 +74,7 @@ def process_files_background(task_id, file_paths, filter_type, solde_initial):
         
         # Conserver le DataFrame pour filtres temps réel (mémoire only)
         task_status[task_id]['_df'] = df_final
+        task_status[task_id]['solde_initial'] = solde_initial
 
         # Créer le rapport Excel
         task_status[task_id]['progress'] = 85
@@ -208,14 +209,14 @@ def filter_stats(task_id):
         stats = {
             'total_trades': len(df),
             'profit_total': round(df['Profit'].sum(), 2) if 'Profit' in df.columns else 0,
-            'profit_compose': round(df['Profit_cumule'].iloc[-1], 2) if 'Profit_cumule' in df.columns and len(df) > 0 else 0,
-            'pips_totaux': round(df['Profit_pips_cumule'].iloc[-1], 2) if 'Profit_pips_cumule' in df.columns and len(df) > 0 else 0,
-            'solde_final': round(df['Solde_cumule'].iloc[-1], 2) if 'Solde_cumule' in df.columns and len(df) > 0 else 0,
+            'profit_compose': 0,
+            'pips_totaux': 0,
+            'solde_final': 0,
             'rendement_pct': 0,
             'trades_gagnants': int((df['Profit'] > 0).sum()) if 'Profit' in df.columns else 0,
             'trades_perdants': int((df['Profit'] < 0).sum()) if 'Profit' in df.columns else 0,
             'taux_reussite': 0,
-            'drawdown_max': float(df.get('Drawdown_pct', pd.Series([0])).max()) if 'Drawdown_pct' in df.columns else 0,
+            'drawdown_max': 0,
             'heures_in_counts': aggs.get('heures_in_counts').to_dict() if aggs.get('heures_in_counts') is not None and hasattr(aggs.get('heures_in_counts'), 'to_dict') else {},
             'heures_out_counts': aggs.get('heures_out_counts').to_dict() if aggs.get('heures_out_counts') is not None and hasattr(aggs.get('heures_out_counts'), 'to_dict') else {},
             'profits_par_heure_out': aggs.get('profits_par_heure_out').to_dict() if aggs.get('profits_par_heure_out') is not None and hasattr(aggs.get('profits_par_heure_out'), 'to_dict') else {},
@@ -235,18 +236,56 @@ def filter_stats(task_id):
             'sl_par_mois': aggs.get('sl_par_mois').to_dict() if aggs.get('sl_par_mois') is not None and hasattr(aggs.get('sl_par_mois'), 'to_dict') else {},
             'duree_moyenne_minutes': aggs.get('duree_moyenne_minutes'),
             'duree_mediane_minutes': aggs.get('duree_mediane_minutes'),
-            'evolution_somme_cumulee': aggs.get('evolution_somme_cumulee') or [],
+            # Courbe d'évolution: recalculer sur le sous-ensemble sélectionné (cumul linéaire)
+            'evolution_somme_cumulee': [],
             'sessions_total': sessions.get('sessions_total', {}),
             'sessions_par_pair': sessions.get('sessions_par_pair', {}),
             'pairs': list(df['Symbole_ordre'].dropna().unique()) if 'Symbole_ordre' in df.columns else []
         }
-        # recompute dependent metrics
+        # recompute dependent metrics (cumul, solde, drawdown) sur le sous-ensemble
         try:
-            if stats['solde_final'] and 'Profit' in df.columns and len(df) > 0:
-                solde_initial = float(df['Solde_cumule'].iloc[0]) if 'Solde_cumule' in df.columns else 0
+            if len(df) > 0 and 'Profit' in df.columns:
+                temp = df.copy()
+                temp['__dt'] = pd.to_datetime(temp.get("Heure d'ouverture"), errors='coerce')
+                temp = temp[temp['__dt'].notna()].sort_values('__dt')
+                temp['__cum_profit'] = temp['Profit'].cumsum()
+                stats['profit_compose'] = round(float(temp['__cum_profit'].iloc[-1]), 2)
+
+                # Pips cumulés si dispo
+                if 'Profit_pips' in temp.columns:
+                    temp['__cum_pips'] = temp['Profit_pips'].cumsum()
+                    stats['pips_totaux'] = round(float(temp['__cum_pips'].iloc[-1]), 2)
+
+                solde_initial = float(task_status.get(task_id, {}).get('solde_initial', 0))
+                stats['solde_final'] = round(solde_initial + stats['profit_compose'], 2) if solde_initial else stats['profit_compose']
                 stats['rendement_pct'] = round(((stats['solde_final'] - solde_initial) / solde_initial * 100) if solde_initial else 0, 2)
+
+                # Drawdown basé sur equity filtrée
+                if solde_initial:
+                    equity = solde_initial + temp['__cum_profit']
+                else:
+                    equity = temp['__cum_profit']
+                peak = equity.cummax()
+                dd = (peak - equity) / peak.replace(0, pd.NA) * 100
+                stats['drawdown_max'] = round(float(dd.max(skipna=True) or 0), 2)
+
             denom = stats['trades_gagnants'] + stats['trades_perdants']
             stats['taux_reussite'] = round((stats['trades_gagnants'] / denom * 100) if denom else 0, 1)
+        except Exception:
+            pass
+
+        # Construire la série d'évolution cumulée triée par date sur le filtre
+        try:
+            if "Heure d'ouverture" in df.columns and "Profit" in df.columns:
+                temp = df.copy()
+                temp['__dt'] = pd.to_datetime(temp["Heure d'ouverture"], errors='coerce')
+                temp = temp[temp['__dt'].notna()].sort_values('__dt')
+                cumul = 0.0
+                evolution = []
+                for _, r in temp.iterrows():
+                    cumul += float(r['Profit']) if pd.notna(r['Profit']) else 0.0
+                    evolution.append({'date': r['__dt'].isoformat(), 'solde': round(cumul, 2)})
+                stats['evolution_somme_cumulee'] = evolution
         except Exception:
             pass
 
