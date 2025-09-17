@@ -455,6 +455,11 @@
         .accordion-content { display: none; padding: 14px 16px; background: white; }
         .accordion-section.open .accordion-content { display: block; }
 
+        /* Chips multi-select */
+        .chips-container { display: flex; flex-wrap: wrap; gap: 8px; border: 2px solid #e8ebff; border-radius: 8px; padding: 10px; background: #fff; min-height: 44px; }
+        .chip { padding: 8px 12px; border-radius: 999px; border: 1px solid #d6dcff; cursor: pointer; background: #f7f8ff; color: #333; font-weight: 600; }
+        .chip.selected { background: #667eea; color: #fff; border-color: #667eea; }
+
         @media (max-width: 768px) {
             .header h1 {
                 font-size: 2rem;
@@ -588,6 +593,32 @@
                     <i class="fas fa-file-excel"></i>
                     Télécharger le rapport Excel
                 </a>
+            </div>
+
+            <!-- Filtres dynamiques -->
+            <div class="option-group" style="margin-top:20px">
+                <label><i class="fas fa-filter"></i> Filtres d'affichage</label>
+                <div style="display:grid; grid-template-columns:2fr 1fr 1fr; gap:14px; align-items:start;">
+                    <div>
+                        <div style="font-weight:600;color:#333;margin-bottom:6px">Paires</div>
+                        <div id="pairsChips" class="chips-container"></div>
+                        <div style="margin-top:8px; display:flex; gap:8px;">
+                            <button id="selectAllPairs" class="btn" type="button" style="padding:8px 12px; font-size:0.9rem">Tout sélectionner</button>
+                            <button id="clearPairs" class="btn" type="button" style="padding:8px 12px; font-size:0.9rem;">Vider</button>
+                        </div>
+                    </div>
+                    <div>
+                        <div style="font-weight:600;color:#333;margin-bottom:6px">Date début</div>
+                        <input type="date" id="dateStart" class="number-input" />
+                    </div>
+                    <div>
+                        <div style="font-weight:600;color:#333;margin-bottom:6px">Date fin</div>
+                        <input type="date" id="dateEnd" class="number-input" />
+                    </div>
+                </div>
+                <div style="margin-top:10px">
+                    <button id="applyFilters" class="btn btn-success" type="button"><i class="fas fa-sync"></i> Appliquer les filtres</button>
+                </div>
             </div>
         </div>
 
@@ -973,12 +1004,14 @@
             downloadLink.href = status.report_url;
 
             resultsContainer.style.display = 'block';
-            // Ajouter les canvases si pas déjà présents
-            if (!document.getElementById('chartHeures')) {
-                const wrapper = document.createElement('div');
-                wrapper.innerHTML = chartsHtml;
-                resultsContainer.appendChild(wrapper);
+            // Injecter/mettre à jour la zone des graphiques (wrapper dédié)
+            let chartsWrapper = document.getElementById('chartsWrapper');
+            if (!chartsWrapper) {
+                chartsWrapper = document.createElement('div');
+                chartsWrapper.id = 'chartsWrapper';
+                resultsContainer.appendChild(chartsWrapper);
             }
+            chartsWrapper.innerHTML = chartsHtml;
 
             // Construire données heures IN/OUT
             const heuresIn = stats.heures_in_counts || {};
@@ -1220,6 +1253,57 @@
                 },
                 options: { responsive: true, scales: { y: { beginAtZero: true } } }
             });
+
+            // Remplir le sélecteur de paires
+            const pairsChips = document.getElementById('pairsChips');
+            let selectedPairs = new Set(stats.pairs || []);
+            if (pairsChips && stats.pairs) {
+                pairsChips.innerHTML = '';
+                (stats.pairs || []).forEach(p => {
+                    const chip = document.createElement('div');
+                    chip.className = 'chip selected';
+                    chip.textContent = p;
+                    chip.onclick = () => {
+                        if (selectedPairs.has(p)) {
+                            selectedPairs.delete(p); chip.classList.remove('selected');
+                        } else {
+                            selectedPairs.add(p); chip.classList.add('selected');
+                        }
+                    };
+                    pairsChips.appendChild(chip);
+                });
+            }
+            const getSelectedPairs = () => Array.from(selectedPairs);
+            document.getElementById('selectAllPairs').onclick = () => {
+                selectedPairs = new Set(stats.pairs || []);
+                document.querySelectorAll('#pairsChips .chip').forEach(c => c.classList.add('selected'));
+            };
+            document.getElementById('clearPairs').onclick = () => {
+                selectedPairs.clear();
+                document.querySelectorAll('#pairsChips .chip').forEach(c => c.classList.remove('selected'));
+                // Optionnel: appliquer immédiatement le filtre vide (toutes paires)
+                document.getElementById('applyFilters').click();
+            };
+            document.getElementById('applyFilters').onclick = async () => {
+                const payload = {
+                    pairs: getSelectedPairs(),
+                    date_start: document.getElementById('dateStart').value || null,
+                    date_end: document.getElementById('dateEnd').value || null
+                };
+                try {
+                    const resp = await fetch(`/filter_stats/${currentTaskId}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)});
+                    const data = await resp.json();
+                    if (data.success) {
+                        // Reconstruire uniquement les graphiques (réutilise showResults pour simplicité)
+                        status.statistics = data.statistics;
+                        showResults(status);
+                    } else {
+                        showError(data.error || 'Erreur lors du filtrage');
+                    }
+                } catch (e) {
+                    showError('Erreur réseau lors du filtrage: ' + e.message);
+                }
+            };
 
             resultsContainer.scrollIntoView({ behavior: 'smooth' });
         }

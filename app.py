@@ -13,6 +13,7 @@ from datetime import datetime
 import shutil
 from werkzeug.utils import secure_filename
 from trading_analyzer_unified import TradingAnalyzer
+import pandas as pd
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'trading-analyzer-secret-key-2025')
@@ -71,6 +72,9 @@ def process_files_background(task_id, file_paths, filter_type, solde_initial):
             task_status[task_id]['progress'] = 100
             return
         
+        # Conserver le DataFrame pour filtres temps réel (mémoire only)
+        task_status[task_id]['_df'] = df_final
+
         # Créer le rapport Excel
         task_status[task_id]['progress'] = 85
         task_status[task_id]['message'] = 'Génération du rapport Excel...'
@@ -144,7 +148,9 @@ def process_files_background(task_id, file_paths, filter_type, solde_initial):
             'evolution_somme_cumulee': aggs.get('evolution_somme_cumulee') if aggs.get('evolution_somme_cumulee') is not None else [],
             # Sessions (Asie/Europe/Amérique)
             'sessions_total': sessions.get('sessions_total', {}),
-            'sessions_par_pair': sessions.get('sessions_par_pair', {})
+            'sessions_par_pair': sessions.get('sessions_par_pair', {}),
+            # Liste des paires disponibles (pour l'UI)
+            'pairs': list(df_final['Symbole_ordre'].dropna().unique()) if 'Symbole_ordre' in df_final.columns else []
         }
         
         # Nettoyer les fichiers uploadés
@@ -159,6 +165,94 @@ def process_files_background(task_id, file_paths, filter_type, solde_initial):
         task_status[task_id]['error'] = str(e)
         task_status[task_id]['progress'] = 100
         task_status[task_id]['message'] = f'Erreur: {str(e)}'
+
+@app.route('/filter_stats/<task_id>', methods=['POST'])
+def filter_stats(task_id):
+    """Recalcule les agrégations pour un sous-ensemble (paires + intervalle de dates)."""
+    if task_id not in task_status:
+        return jsonify({'success': False, 'error': 'Tâche inconnue'}), 404
+    if '_df' not in task_status[task_id] or task_status[task_id]['_df'] is None:
+        return jsonify({'success': False, 'error': 'Données non disponibles en mémoire'}), 400
+    try:
+        payload = request.get_json(force=True, silent=True) or {}
+        pairs = payload.get('pairs') or []
+        date_start = payload.get('date_start')
+        date_end = payload.get('date_end')
+
+        df = task_status[task_id]['_df'].copy()
+        # Filtre par paires
+        if pairs and 'Symbole_ordre' in df.columns:
+            df = df[df['Symbole_ordre'].isin(pairs)]
+        # Filtre dates
+        if 'Heure d\'ouverture' in df.columns:
+            df['__dt'] = pd.to_datetime(df['Heure d\'ouverture'], errors='coerce')
+            if date_start:
+                try:
+                    ds = pd.to_datetime(date_start)
+                    df = df[df['__dt'] >= ds]
+                except Exception:
+                    pass
+            if date_end:
+                try:
+                    de = pd.to_datetime(date_end) + pd.Timedelta(days=1)
+                    df = df[df['__dt'] < de]
+                except Exception:
+                    pass
+            df = df.drop(columns=['__dt'])
+
+        analyzer = TradingAnalyzer()
+        aggs = analyzer.calculer_agregations_graphes(df)
+        sessions = analyzer.calculer_performance_par_session(df)
+
+        # Re-bâtir un objet statistics minimal pour réutiliser showResults côté web
+        stats = {
+            'total_trades': len(df),
+            'profit_total': round(df['Profit'].sum(), 2) if 'Profit' in df.columns else 0,
+            'profit_compose': round(df['Profit_cumule'].iloc[-1], 2) if 'Profit_cumule' in df.columns and len(df) > 0 else 0,
+            'pips_totaux': round(df['Profit_pips_cumule'].iloc[-1], 2) if 'Profit_pips_cumule' in df.columns and len(df) > 0 else 0,
+            'solde_final': round(df['Solde_cumule'].iloc[-1], 2) if 'Solde_cumule' in df.columns and len(df) > 0 else 0,
+            'rendement_pct': 0,
+            'trades_gagnants': int((df['Profit'] > 0).sum()) if 'Profit' in df.columns else 0,
+            'trades_perdants': int((df['Profit'] < 0).sum()) if 'Profit' in df.columns else 0,
+            'taux_reussite': 0,
+            'drawdown_max': float(df.get('Drawdown_pct', pd.Series([0])).max()) if 'Drawdown_pct' in df.columns else 0,
+            'heures_in_counts': aggs.get('heures_in_counts').to_dict() if aggs.get('heures_in_counts') is not None and hasattr(aggs.get('heures_in_counts'), 'to_dict') else {},
+            'heures_out_counts': aggs.get('heures_out_counts').to_dict() if aggs.get('heures_out_counts') is not None and hasattr(aggs.get('heures_out_counts'), 'to_dict') else {},
+            'profits_par_heure_out': aggs.get('profits_par_heure_out').to_dict() if aggs.get('profits_par_heure_out') is not None and hasattr(aggs.get('profits_par_heure_out'), 'to_dict') else {},
+            'profits_par_jour_out': aggs.get('profits_par_jour_out').to_dict() if aggs.get('profits_par_jour_out') is not None and hasattr(aggs.get('profits_par_jour_out'), 'to_dict') else {},
+            'profits_par_mois_out': aggs.get('profits_par_mois_out').to_dict() if aggs.get('profits_par_mois_out') is not None and hasattr(aggs.get('profits_par_mois_out'), 'to_dict') else {},
+            'profits_pos_par_heure_out': aggs.get('profits_pos_par_heure_out').to_dict() if aggs.get('profits_pos_par_heure_out') is not None and hasattr(aggs.get('profits_pos_par_heure_out'), 'to_dict') else {},
+            'pertes_abs_par_heure_out': aggs.get('pertes_abs_par_heure_out').to_dict() if aggs.get('pertes_abs_par_heure_out') is not None and hasattr(aggs.get('pertes_abs_par_heure_out'), 'to_dict') else {},
+            'profits_pos_par_jour_out': aggs.get('profits_pos_par_jour_out').to_dict() if aggs.get('profits_pos_par_jour_out') is not None and hasattr(aggs.get('profits_pos_par_jour_out'), 'to_dict') else {},
+            'pertes_abs_par_jour_out': aggs.get('pertes_abs_par_jour_out').to_dict() if aggs.get('pertes_abs_par_jour_out') is not None and hasattr(aggs.get('pertes_abs_par_jour_out'), 'to_dict') else {},
+            'profits_pos_par_mois_out': aggs.get('profits_pos_par_mois_out').to_dict() if aggs.get('profits_pos_par_mois_out') is not None and hasattr(aggs.get('profits_pos_par_mois_out'), 'to_dict') else {},
+            'pertes_abs_par_mois_out': aggs.get('pertes_abs_par_mois_out').to_dict() if aggs.get('pertes_abs_par_mois_out') is not None and hasattr(aggs.get('pertes_abs_par_mois_out'), 'to_dict') else {},
+            'tp_par_heure': aggs.get('tp_par_heure').to_dict() if aggs.get('tp_par_heure') is not None and hasattr(aggs.get('tp_par_heure'), 'to_dict') else {},
+            'sl_par_heure': aggs.get('sl_par_heure').to_dict() if aggs.get('sl_par_heure') is not None and hasattr(aggs.get('sl_par_heure'), 'to_dict') else {},
+            'tp_par_jour': aggs.get('tp_par_jour').to_dict() if aggs.get('tp_par_jour') is not None and hasattr(aggs.get('tp_par_jour'), 'to_dict') else {},
+            'sl_par_jour': aggs.get('sl_par_jour').to_dict() if aggs.get('sl_par_jour') is not None and hasattr(aggs.get('sl_par_jour'), 'to_dict') else {},
+            'tp_par_mois': aggs.get('tp_par_mois').to_dict() if aggs.get('tp_par_mois') is not None and hasattr(aggs.get('tp_par_mois'), 'to_dict') else {},
+            'sl_par_mois': aggs.get('sl_par_mois').to_dict() if aggs.get('sl_par_mois') is not None and hasattr(aggs.get('sl_par_mois'), 'to_dict') else {},
+            'duree_moyenne_minutes': aggs.get('duree_moyenne_minutes'),
+            'duree_mediane_minutes': aggs.get('duree_mediane_minutes'),
+            'evolution_somme_cumulee': aggs.get('evolution_somme_cumulee') or [],
+            'sessions_total': sessions.get('sessions_total', {}),
+            'sessions_par_pair': sessions.get('sessions_par_pair', {}),
+            'pairs': list(df['Symbole_ordre'].dropna().unique()) if 'Symbole_ordre' in df.columns else []
+        }
+        # recompute dependent metrics
+        try:
+            if stats['solde_final'] and 'Profit' in df.columns and len(df) > 0:
+                solde_initial = float(df['Solde_cumule'].iloc[0]) if 'Solde_cumule' in df.columns else 0
+                stats['rendement_pct'] = round(((stats['solde_final'] - solde_initial) / solde_initial * 100) if solde_initial else 0, 2)
+            denom = stats['trades_gagnants'] + stats['trades_perdants']
+            stats['taux_reussite'] = round((stats['trades_gagnants'] / denom * 100) if denom else 0, 1)
+        except Exception:
+            pass
+
+        return jsonify({'success': True, 'statistics': stats})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/')
 def index():
@@ -230,8 +324,12 @@ def get_status(task_id):
     """Récupère le statut d'une tâche"""
     if task_id not in task_status:
         return jsonify({'error': 'Tâche non trouvée'}), 404
-    
-    return jsonify(task_status[task_id])
+
+    # Copier le statut et retirer les objets non sérialisables
+    status = dict(task_status[task_id])
+    status.pop('df_final', None)
+    status.pop('_df', None)
+    return jsonify(status)
 
 @app.route('/download_report/<filename>')
 def download_report(filename):
