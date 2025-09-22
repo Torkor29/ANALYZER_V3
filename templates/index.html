@@ -550,16 +550,6 @@
                         </div>
                     </div>
 
-                    <div class="options-grid">
-                        <div class="option-group">
-                            <label for="multiplicateur"><i class="fas fa-times"></i> Multiplicateur</label>
-                            <input type="number" id="multiplicateur" name="multiplicateur" value="1" min="0.1" max="100" step="0.1" class="number-input" placeholder="Multiplicateur (défaut: 1)">
-                            <small style="color: #666; font-size: 0.9rem; margin-top: 5px; display: block;">
-                                Multiplie tous les profits/pertes par cette valeur (ex: 2 = double les gains/pertes)
-                            </small>
-                        </div>
-                    </div>
-
                     <div style="text-align: center;">
                         <button type="submit" class="btn btn-success" id="analyzeBtn">
                             <i class="fas fa-play"></i>
@@ -768,7 +758,6 @@
             
             formData.append('filter_type', document.querySelector('input[name="filter_type"]:checked').value);
             formData.append('solde_initial', document.getElementById('soldeInitial').value);
-            formData.append('multiplicateur', document.getElementById('multiplicateur').value);
 
             // Afficher le bouton de chargement
             const btn = document.getElementById('analyzeBtn');

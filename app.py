@@ -50,7 +50,7 @@ def cleanup_old_files():
                         except Exception:
                             pass
 
-def process_files_background(task_id, file_paths, filter_type, solde_initial, multiplicateur=1):
+def process_files_background(task_id, file_paths, filter_type, solde_initial):
     """Traite les fichiers en arrière-plan"""
     try:
         # Initialiser le statut de la tâche
@@ -58,7 +58,7 @@ def process_files_background(task_id, file_paths, filter_type, solde_initial, mu
         task_status[task_id]['message'] = 'Initialisation de l\'analyseur...'
         
         # Créer l'analyseur
-        analyzer = TradingAnalyzer(solde_initial=solde_initial, multiplicateur=multiplicateur)
+        analyzer = TradingAnalyzer(solde_initial=solde_initial)
         
         # Traiter les fichiers
         task_status[task_id]['progress'] = 20
@@ -93,17 +93,14 @@ def process_files_background(task_id, file_paths, filter_type, solde_initial, mu
         
         # Calculer les statistiques finales
         total_trades = len(df_final)
-        # Utiliser les profits multipliés pour les statistiques
-        profit_total = df_final['Profit_multiplie'].sum() if 'Profit_multiplie' in df_final.columns else df_final['Profit'].sum()
+        profit_total = df_final['Profit'].sum()
         profit_compose = df_final['Profit_cumule'].iloc[-1] if len(df_final) > 0 else 0
         pips_totaux = df_final['Profit_pips_cumule'].iloc[-1] if len(df_final) > 0 else 0
         solde_final = df_final['Solde_cumule'].iloc[-1] if len(df_final) > 0 else solde_initial
         rendement_pct = ((solde_final - solde_initial) / solde_initial * 100)
         
-        # Utiliser les profits multipliés pour compter les trades gagnants/perdants
-        profit_col = 'Profit_multiplie' if 'Profit_multiplie' in df_final.columns else 'Profit'
-        trades_gagnants = len(df_final[df_final[profit_col] > 0])
-        trades_perdants = len(df_final[df_final[profit_col] < 0])
+        trades_gagnants = len(df_final[df_final["Profit"] > 0])
+        trades_perdants = len(df_final[df_final["Profit"] < 0])
         taux_reussite = (trades_gagnants / (trades_gagnants + trades_perdants) * 100) if (trades_gagnants + trades_perdants) > 0 else 0
         
         # Drawdown maximum
@@ -209,16 +206,15 @@ def filter_stats(task_id):
         sessions = analyzer.calculer_performance_par_session(df)
 
         # Re-bâtir un objet statistics minimal pour réutiliser showResults côté web
-        profit_col = 'Profit_multiplie' if 'Profit_multiplie' in df.columns else 'Profit'
         stats = {
             'total_trades': len(df),
-            'profit_total': round(df[profit_col].sum(), 2) if profit_col in df.columns else 0,
+            'profit_total': round(df['Profit'].sum(), 2) if 'Profit' in df.columns else 0,
             'profit_compose': 0,
             'pips_totaux': 0,
             'solde_final': 0,
             'rendement_pct': 0,
-            'trades_gagnants': int((df[profit_col] > 0).sum()) if profit_col in df.columns else 0,
-            'trades_perdants': int((df[profit_col] < 0).sum()) if profit_col in df.columns else 0,
+            'trades_gagnants': int((df['Profit'] > 0).sum()) if 'Profit' in df.columns else 0,
+            'trades_perdants': int((df['Profit'] < 0).sum()) if 'Profit' in df.columns else 0,
             'taux_reussite': 0,
             'drawdown_max': 0,
             'heures_in_counts': aggs.get('heures_in_counts').to_dict() if aggs.get('heures_in_counts') is not None and hasattr(aggs.get('heures_in_counts'), 'to_dict') else {},
@@ -248,17 +244,16 @@ def filter_stats(task_id):
         }
         # recompute dependent metrics (cumul, solde, drawdown) sur le sous-ensemble
         try:
-            if len(df) > 0 and profit_col in df.columns:
+            if len(df) > 0 and 'Profit' in df.columns:
                 temp = df.copy()
                 temp['__dt'] = pd.to_datetime(temp.get("Heure d'ouverture"), errors='coerce')
                 temp = temp[temp['__dt'].notna()].sort_values('__dt')
-                temp['__cum_profit'] = temp[profit_col].cumsum()
+                temp['__cum_profit'] = temp['Profit'].cumsum()
                 stats['profit_compose'] = round(float(temp['__cum_profit'].iloc[-1]), 2)
 
                 # Pips cumulés si dispo
-                pips_col = 'Profit_pips_multiplie' if 'Profit_pips_multiplie' in temp.columns else 'Profit_pips'
-                if pips_col in temp.columns:
-                    temp['__cum_pips'] = temp[pips_col].cumsum()
+                if 'Profit_pips' in temp.columns:
+                    temp['__cum_pips'] = temp['Profit_pips'].cumsum()
                     stats['pips_totaux'] = round(float(temp['__cum_pips'].iloc[-1]), 2)
 
                 solde_initial = float(task_status.get(task_id, {}).get('solde_initial', 0))
@@ -281,14 +276,14 @@ def filter_stats(task_id):
 
         # Construire la série d'évolution cumulée triée par date sur le filtre
         try:
-            if "Heure d'ouverture" in df.columns and profit_col in df.columns:
+            if "Heure d'ouverture" in df.columns and "Profit" in df.columns:
                 temp = df.copy()
                 temp['__dt'] = pd.to_datetime(temp["Heure d'ouverture"], errors='coerce')
                 temp = temp[temp['__dt'].notna()].sort_values('__dt')
                 cumul = 0.0
                 evolution = []
                 for _, r in temp.iterrows():
-                    cumul += float(r[profit_col]) if pd.notna(r[profit_col]) else 0.0
+                    cumul += float(r['Profit']) if pd.notna(r['Profit']) else 0.0
                     evolution.append({'date': r['__dt'].isoformat(), 'solde': round(cumul, 2)})
                 stats['evolution_somme_cumulee'] = evolution
         except Exception:
@@ -326,11 +321,6 @@ def upload_files():
         except ValueError:
             solde_initial = 10000
         
-        try:
-            multiplicateur = float(request.form.get('multiplicateur', 1))
-        except ValueError:
-            multiplicateur = 1
-        
         # Sauvegarder les fichiers
         file_paths = []
         for file in files:
@@ -358,7 +348,7 @@ def upload_files():
         # Lancer le traitement en arrière-plan
         thread = threading.Thread(
             target=process_files_background,
-            args=(task_id, file_paths, filter_type, solde_initial, multiplicateur)
+            args=(task_id, file_paths, filter_type, solde_initial)
         )
         thread.daemon = True
         thread.start()

@@ -26,9 +26,8 @@ class InstrumentType(Enum):
     ACTIONS = "actions"
 
 class TradingAnalyzer:
-    def __init__(self, solde_initial=10000, multiplicateur=1):
+    def __init__(self, solde_initial=10000):
         self.solde_initial = solde_initial
-        self.multiplicateur = multiplicateur
         self.statistiques_fichiers = {}
         
         # Configuration des symboles par type
@@ -706,13 +705,9 @@ class TradingAnalyzer:
             profit_original = row["Profit"] if pd.notna(row["Profit"]) else 0
             pips = row["Profit_pips"] if pd.notna(row["Profit_pips"]) else 0
             
-            # Appliquer le multiplicateur au profit
-            profit_multiplie = profit_original * self.multiplicateur
-            pips_multiplies = pips * self.multiplicateur
-            
-            # Calculer le rendement en pourcentage basé sur le profit multiplié
-            if profit_multiplie != 0 and self.solde_initial != 0:
-                rendement_trade_pct = (profit_multiplie / self.solde_initial) * 100
+            # Calculer le rendement en pourcentage
+            if profit_original != 0 and self.solde_initial != 0:
+                rendement_trade_pct = (profit_original / self.solde_initial) * 100
                 profit_compose = (rendement_trade_pct / 100) * solde_courant
             else:
                 profit_compose = 0
@@ -720,7 +715,7 @@ class TradingAnalyzer:
             # Mise à jour des cumuls
             solde_courant += profit_compose
             profit_cumule_reel += profit_compose
-            pips_cumule += pips_multiplies
+            pips_cumule += pips
             
             # Mise à jour du plus haut solde historique
             if solde_courant > plus_haut_solde:
@@ -753,9 +748,6 @@ class TradingAnalyzer:
             df_complet.at[idx, "Drawdown_pct"] = round(drawdown_pct, 2)
             df_complet.at[idx, "Drawdown_euros"] = round(drawdown_euros, 2)
             df_complet.at[idx, "Drawdown_running_pct"] = round(drawdown_running_max, 2)
-            # Stocker aussi le profit multiplié pour les statistiques
-            df_complet.at[idx, "Profit_multiplie"] = round(profit_multiplie, 2)
-            df_complet.at[idx, "Profit_pips_multiplie"] = round(pips_multiplies, 2)
         
         print(f"[DEBUG] Compound calculations completed. Final solde: {solde_courant:.2f}")
         print(f"[DEBUG] Max drawdown: {df_complet['Drawdown_pct'].max():.2f}%")
@@ -897,10 +889,6 @@ class TradingAnalyzer:
         df = df.copy()
         df["Datetime"] = pd.to_datetime(df["Heure d'ouverture"], errors='coerce')
         df = df[df["Datetime"].notna()]
-        
-        # Utiliser les profits multipliés si disponibles
-        profit_col = 'Profit_multiplie' if 'Profit_multiplie' in df.columns else 'Profit'
-        pips_col = 'Profit_pips_multiplie' if 'Profit_pips_multiplie' in df.columns else 'Profit_pips'
 
         # Préparer tables IN et OUT
         df_in = df[df["Direction"] == "in"].copy()
@@ -929,22 +917,22 @@ class TradingAnalyzer:
         mois_index = pd.Index(range(1, 13), name="Mois")
         if len(df_out) > 0:
             # Sommes nettes (peuvent masquer des pertes si positives)
-            profits_par_heure = df_out.groupby(df_out["Datetime"].dt.hour)[profit_col].sum().sort_index().reindex(heures_index, fill_value=0.0)
-            profits_par_jour = df_out.groupby(df_out["Datetime"].dt.dayofweek)[profit_col].sum().sort_index().reindex(jours_index, fill_value=0.0)
-            profits_par_mois = df_out.groupby(df_out["Datetime"].dt.month)[profit_col].sum().sort_index().reindex(mois_index, fill_value=0.0)
+            profits_par_heure = df_out.groupby(df_out["Datetime"].dt.hour)["Profit"].sum().sort_index().reindex(heures_index, fill_value=0.0)
+            profits_par_jour = df_out.groupby(df_out["Datetime"].dt.dayofweek)["Profit"].sum().sort_index().reindex(jours_index, fill_value=0.0)
+            profits_par_mois = df_out.groupby(df_out["Datetime"].dt.month)["Profit"].sum().sort_index().reindex(mois_index, fill_value=0.0)
 
             # Séparer correctement: somme des profits positifs uniquement et somme ABS des pertes uniquement
-            df_pos = df_out[df_out[profit_col] > 0]
-            df_neg = df_out[df_out[profit_col] < 0]
+            df_pos = df_out[df_out["Profit"] > 0]
+            df_neg = df_out[df_out["Profit"] < 0]
 
-            profits_pos_h = df_pos.groupby(df_pos["Datetime"].dt.hour)[profit_col].sum().sort_index().reindex(heures_index, fill_value=0.0)
-            pertes_abs_h = (-df_neg.groupby(df_neg["Datetime"].dt.hour)[profit_col].sum()).sort_index().reindex(heures_index, fill_value=0.0)
+            profits_pos_h = df_pos.groupby(df_pos["Datetime"].dt.hour)["Profit"].sum().sort_index().reindex(heures_index, fill_value=0.0)
+            pertes_abs_h = (-df_neg.groupby(df_neg["Datetime"].dt.hour)["Profit"].sum()).sort_index().reindex(heures_index, fill_value=0.0)
 
-            profits_pos_d = df_pos.groupby(df_pos["Datetime"].dt.dayofweek)[profit_col].sum().sort_index().reindex(jours_index, fill_value=0.0)
-            pertes_abs_d = (-df_neg.groupby(df_neg["Datetime"].dt.dayofweek)[profit_col].sum()).sort_index().reindex(jours_index, fill_value=0.0)
+            profits_pos_d = df_pos.groupby(df_pos["Datetime"].dt.dayofweek)["Profit"].sum().sort_index().reindex(jours_index, fill_value=0.0)
+            pertes_abs_d = (-df_neg.groupby(df_neg["Datetime"].dt.dayofweek)["Profit"].sum()).sort_index().reindex(jours_index, fill_value=0.0)
 
-            profits_pos_m = df_pos.groupby(df_pos["Datetime"].dt.month)[profit_col].sum().sort_index().reindex(mois_index, fill_value=0.0)
-            pertes_abs_m = (-df_neg.groupby(df_neg["Datetime"].dt.month)[profit_col].sum()).sort_index().reindex(mois_index, fill_value=0.0)
+            profits_pos_m = df_pos.groupby(df_pos["Datetime"].dt.month)["Profit"].sum().sort_index().reindex(mois_index, fill_value=0.0)
+            pertes_abs_m = (-df_neg.groupby(df_neg["Datetime"].dt.month)["Profit"].sum()).sort_index().reindex(mois_index, fill_value=0.0)
         else:
             profits_par_heure = pd.Series(0.0, index=heures_index, dtype=float)
             profits_par_jour = pd.Series(0.0, index=jours_index, dtype=float)
@@ -986,14 +974,14 @@ class TradingAnalyzer:
         tpsl_by_month = pd.Series(0, index=mois_index, dtype=int)
         sl_by_month = pd.Series(0, index=mois_index, dtype=int)
         if len(df_out) > 0 and "Cle_Match" in df_out.columns:
-            trade_profit = df.groupby("Cle_Match")[profit_col].sum().reset_index()
+            trade_profit = df.groupby("Cle_Match")["Profit"].sum().reset_index()
             last_out = df_out.sort_values(["Cle_Match", "Datetime"]).groupby("Cle_Match").tail(1)[["Cle_Match", "Datetime"]]
             trades_final = trade_profit.merge(last_out, on="Cle_Match", how="inner")
             trades_final["hour"] = trades_final["Datetime"].dt.hour
             trades_final["day"] = trades_final["Datetime"].dt.dayofweek
             trades_final["month"] = trades_final["Datetime"].dt.month
-            tps = trades_final[trades_final[profit_col] > 0]
-            sls = trades_final[trades_final[profit_col] < 0]
+            tps = trades_final[trades_final["Profit"] > 0]
+            sls = trades_final[trades_final["Profit"] < 0]
             tpsl_by_hour = tps.groupby("hour").size().reindex(heures_index, fill_value=0)
             sl_by_hour = sls.groupby("hour").size().reindex(heures_index, fill_value=0)
             tpsl_by_day = tps.groupby("day").size().reindex(jours_index, fill_value=0)
@@ -1010,12 +998,12 @@ class TradingAnalyzer:
         # 4) Évolution cumulée (linéaire) des profits par trade au moment du dernier OUT
         cumul_df = pd.DataFrame(columns=["Datetime", "Profit_Trade", "Cumul_Profit"]) 
         if "Cle_Match" in df.columns and len(df_out) > 0:
-            trades_sum = df.groupby("Cle_Match")[profit_col].sum().reset_index()
+            trades_sum = df.groupby("Cle_Match")["Profit"].sum().reset_index()
             last_out = df_out.sort_values(["Cle_Match", "Datetime"]).groupby("Cle_Match").tail(1)[["Cle_Match", "Datetime"]]
             series_trades = trades_sum.merge(last_out, on="Cle_Match", how="inner").dropna(subset=["Datetime"]) 
             series_trades = series_trades.sort_values("Datetime")
-            series_trades["Cumul_Profit"] = series_trades[profit_col].cumsum()
-            cumul_df = series_trades.rename(columns={profit_col: "Profit_Trade"})[["Datetime", "Profit_Trade", "Cumul_Profit"]]
+            series_trades["Cumul_Profit"] = series_trades["Profit"].cumsum()
+            cumul_df = series_trades.rename(columns={"Profit": "Profit_Trade"})[["Datetime", "Profit_Trade", "Cumul_Profit"]]
         result["cumul_evolution"] = cumul_df
 
         # 5) Durée moyenne/médiane des trades (IN -> dernier OUT)
@@ -1093,9 +1081,6 @@ class TradingAnalyzer:
 
         if "Heure d'ouverture" not in df.columns or "Direction" not in df.columns:
             return result
-        
-        # Utiliser les profits multipliés si disponibles
-        profit_col = 'Profit_multiplie' if 'Profit_multiplie' in df.columns else 'Profit'
 
         data = df.copy()
         data["Datetime"] = pd.to_datetime(data["Heure d'ouverture"], errors='coerce')
@@ -1137,11 +1122,11 @@ class TradingAnalyzer:
             taux_reussite_in = {"Asie": 0.0, "Europe": 0.0, "Amérique": 0.0}
             if "Cle_Match" in d.columns and len(d_in) > 0:
                 # Profit total par trade
-                profit_par_trade = d.groupby("Cle_Match")[profit_col].sum()
+                profit_par_trade = d.groupby("Cle_Match")["Profit"].sum()
                 # Session d'ouverture du trade (session du premier IN)
                 first_in = d_in.sort_values(["Cle_Match","Datetime"]).groupby("Cle_Match").head(1)[["Cle_Match","Session"]]
                 first_in = first_in.dropna(subset=["Cle_Match"]).set_index("Cle_Match")
-                joined = first_in.join(profit_par_trade, how="left").rename(columns={profit_col:"Profit_Trade"})
+                joined = first_in.join(profit_par_trade, how="left").rename(columns={"Profit":"Profit_Trade"})
                 for sess in ["Asie","Europe","Amérique"]:
                     subset = joined[joined["Session"] == sess]
                     denom = len(subset)
@@ -1156,14 +1141,14 @@ class TradingAnalyzer:
             sl_session = {"Asie": 0, "Europe": 0, "Amérique": 0}
             if len(d_out) > 0 and "Cle_Match" in d_out.columns:
                 # Profit total du trade + session du dernier OUT
-                trade_profit = d.groupby("Cle_Match")[profit_col].sum().reset_index()
+                trade_profit = d.groupby("Cle_Match")["Profit"].sum().reset_index()
                 last_out = d_out.sort_values(["Cle_Match","Datetime"]).groupby("Cle_Match").tail(1)[["Cle_Match","Session"]]
                 final = trade_profit.merge(last_out, on="Cle_Match", how="inner")
                 for sess in ["Asie","Europe","Amérique"]:
-                    pnl = final[final["Session"] == sess][profit_col].sum()
+                    pnl = final[final["Session"] == sess]["Profit"].sum()
                     pnl_session[sess] = float(round(pnl, 2))
-                    tp_session[sess] = int((final[(final["Session"] == sess) & (final[profit_col] > 0)]).shape[0])
-                    sl_session[sess] = int((final[(final["Session"] == sess) & (final[profit_col] < 0)]).shape[0])
+                    tp_session[sess] = int((final[(final["Session"] == sess) & (final["Profit"] > 0)]).shape[0])
+                    sl_session[sess] = int((final[(final["Session"] == sess) & (final["Profit"] < 0)]).shape[0])
 
             bloc = {
                 "in_count": {k: int(in_by_session.get(k, 0)) for k in ["Asie","Europe","Amérique"]},
@@ -1213,8 +1198,8 @@ class TradingAnalyzer:
 
         first_in = df_in.sort_values(["Cle_Match","Datetime"]).groupby("Cle_Match").head(1)
         last_out = df_out.sort_values(["Cle_Match","Datetime"]).groupby("Cle_Match").tail(1)
-        profit_par_trade = data.groupby("Cle_Match")[profit_col].sum()
-        pips_par_trade = data.groupby("Cle_Match")[pips_col].sum() if pips_col in data.columns else None
+        profit_par_trade = data.groupby("Cle_Match")["Profit"].sum()
+        pips_par_trade = data.groupby("Cle_Match")["Profit_pips"].sum() if "Profit_pips" in data.columns else None
         outs_count = df_out.groupby("Cle_Match").size()
 
         # Construction du tableau des trades complets
