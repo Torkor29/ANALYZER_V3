@@ -1,0 +1,1331 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trading Analyzer - Analyseur de Trading Professionnel</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 40px;
+        }
+
+        .header h1 {
+            font-size: 3rem;
+            font-weight: 700;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+
+        .header p {
+            font-size: 1.2rem;
+            opacity: 0.9;
+            font-weight: 300;
+        }
+
+        .main-card {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.15);
+            overflow: hidden;
+            margin-bottom: 30px;
+        }
+
+        .card-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .card-header h2 {
+            font-size: 1.8rem;
+            font-weight: 600;
+            margin-bottom: 10px;
+        }
+
+        .card-header p {
+            opacity: 0.9;
+            font-size: 1rem;
+        }
+
+        .card-body {
+            padding: 40px;
+        }
+
+        .upload-zone {
+            border: 3px dashed #667eea;
+            border-radius: 15px;
+            padding: 60px 20px;
+            text-align: center;
+            background: #f8f9ff;
+            margin-bottom: 30px;
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+
+        .upload-zone:hover {
+            border-color: #764ba2;
+            background: #f0f2ff;
+            transform: translateY(-2px);
+        }
+
+        .upload-zone.dragover {
+            border-color: #764ba2;
+            background: #e8ebff;
+            transform: scale(1.02);
+        }
+
+        .upload-icon {
+            font-size: 4rem;
+            color: #667eea;
+            margin-bottom: 20px;
+        }
+
+        .upload-zone h3 {
+            font-size: 1.5rem;
+            color: #333;
+            margin-bottom: 10px;
+            font-weight: 600;
+        }
+
+        .upload-zone p {
+            color: #666;
+            font-size: 1rem;
+            margin-bottom: 20px;
+        }
+
+        .file-input {
+            display: none;
+        }
+
+        .btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            border-radius: 10px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 30px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn:active {
+            transform: translateY(0);
+        }
+
+        .btn-success {
+            background: linear-gradient(135deg, #56ab2f 0%, #a8e6cf 100%);
+        }
+
+        .btn-success:hover {
+            box-shadow: 0 10px 30px rgba(86, 171, 47, 0.4);
+        }
+
+        .options-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+            margin-bottom: 30px;
+        }
+
+        .option-group {
+            background: #f8f9ff;
+            border-radius: 15px;
+            padding: 25px;
+            border: 2px solid #e8ebff;
+        }
+
+        .option-group label {
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 15px;
+            display: block;
+            font-size: 1.1rem;
+        }
+
+        .radio-group {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .radio-option {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 15px;
+            border-radius: 8px;
+            transition: all 0.2s ease;
+            cursor: pointer;
+        }
+
+        .radio-option:hover {
+            background: white;
+        }
+
+        .radio-option input[type="radio"] {
+            margin: 0;
+            transform: scale(1.2);
+        }
+
+        .radio-option.selected {
+            background: white;
+            border: 2px solid #667eea;
+        }
+
+        .number-input {
+            width: 100%;
+            padding: 15px;
+            border: 2px solid #e8ebff;
+            border-radius: 10px;
+            font-size: 1rem;
+            transition: all 0.3s ease;
+        }
+
+        .number-input:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        .file-list {
+            margin-top: 20px;
+            display: none;
+        }
+
+        .file-item {
+            display: flex;
+            align-items: center;
+            justify-content: between;
+            background: white;
+            border: 1px solid #e8ebff;
+            border-radius: 10px;
+            padding: 15px;
+            margin-bottom: 10px;
+        }
+
+        .file-info {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            flex: 1;
+        }
+
+        .file-icon {
+            font-size: 1.5rem;
+            color: #667eea;
+        }
+
+        .file-details h4 {
+            font-weight: 500;
+            color: #333;
+            margin-bottom: 5px;
+        }
+
+        .file-details p {
+            color: #666;
+            font-size: 0.9rem;
+        }
+
+        .remove-file {
+            background: #ff6b6b;
+            color: white;
+            border: none;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s ease;
+        }
+
+        .remove-file:hover {
+            background: #ff5252;
+            transform: scale(1.1);
+        }
+
+        .progress-container {
+            display: none;
+            background: white;
+            border-radius: 15px;
+            padding: 30px;
+            margin-top: 30px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+        }
+
+        .progress-header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .progress-header h3 {
+            color: #333;
+            font-size: 1.5rem;
+            margin-bottom: 10px;
+        }
+
+        .progress-status {
+            color: #666;
+            font-size: 1rem;
+        }
+
+        .progress-bar-container {
+            background: #f0f2ff;
+            border-radius: 25px;
+            height: 20px;
+            overflow: hidden;
+            margin-bottom: 20px;
+        }
+
+        .progress-bar {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            height: 100%;
+            border-radius: 25px;
+            width: 0%;
+            transition: width 0.5s ease;
+            position: relative;
+        }
+
+        .progress-bar::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            bottom: 0;
+            right: 0;
+            background: linear-gradient(
+                90deg,
+                transparent,
+                rgba(255,255,255,0.4),
+                transparent
+            );
+            animation: shimmer 2s infinite;
+        }
+
+        @keyframes shimmer {
+            0% { transform: translateX(-100%); }
+            100% { transform: translateX(100%); }
+        }
+
+        .progress-percentage {
+            text-align: center;
+            font-weight: 600;
+            color: #333;
+            font-size: 1.1rem;
+        }
+
+        .results-container {
+            display: none;
+            background: white;
+            border-radius: 15px;
+            padding: 30px;
+            margin-top: 30px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+        }
+
+        .results-header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .results-header h3 {
+            color: #333;
+            font-size: 1.8rem;
+            margin-bottom: 10px;
+        }
+
+        .results-header .success-icon {
+            font-size: 3rem;
+            color: #56ab2f;
+            margin-bottom: 15px;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .stat-card {
+            background: #f8f9ff;
+            border-radius: 12px;
+            padding: 20px;
+            text-align: center;
+            border: 2px solid #e8ebff;
+            transition: all 0.3s ease;
+        }
+
+        .stat-card:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 10px 25px rgba(0,0,0,0.1);
+        }
+
+        .stat-icon {
+            font-size: 2rem;
+            margin-bottom: 10px;
+        }
+
+        .stat-value {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: #333;
+            margin-bottom: 5px;
+        }
+
+        .stat-label {
+            color: #666;
+            font-size: 0.9rem;
+            font-weight: 500;
+        }
+
+        .download-section {
+            text-align: center;
+            padding-top: 20px;
+            border-top: 2px solid #e8ebff;
+        }
+
+        .error-container {
+            display: none;
+            background: #fff5f5;
+            border: 2px solid #fed7d7;
+            border-radius: 15px;
+            padding: 30px;
+            margin-top: 30px;
+            text-align: center;
+        }
+
+        .error-icon {
+            font-size: 3rem;
+            color: #e53e3e;
+            margin-bottom: 15px;
+        }
+
+        .error-message {
+            color: #e53e3e;
+            font-size: 1.1rem;
+            font-weight: 500;
+        }
+
+        .footer {
+            text-align: center;
+            color: white;
+            margin-top: 40px;
+            opacity: 0.8;
+        }
+
+        /* Accordions */
+        .accordion-section { border: 2px solid #e8ebff; border-radius: 10px; margin: 14px 0; overflow: hidden; }
+        .accordion-header { background: #f8f9ff; cursor: pointer; padding: 12px 16px; display: flex; align-items: center; gap: 10px; }
+        .accordion-header h4 { margin: 0; color: #333; font-size: 1.05rem; }
+        .accordion-toggle { margin-left: auto; color: #667eea; font-weight: 700; }
+        .accordion-content { display: none; padding: 14px 16px; background: white; }
+        .accordion-section.open .accordion-content { display: block; }
+
+        /* Chips multi-select */
+        .chips-container { display: flex; flex-wrap: wrap; gap: 8px; border: 2px solid #e8ebff; border-radius: 8px; padding: 10px; background: #fff; min-height: 44px; }
+        .chip { padding: 8px 12px; border-radius: 999px; border: 1px solid #d6dcff; cursor: pointer; background: #f7f8ff; color: #333; font-weight: 600; }
+        .chip.selected { background: #667eea; color: #fff; border-color: #667eea; }
+
+        @media (max-width: 768px) {
+            .header h1 {
+                font-size: 2rem;
+            }
+            
+            .options-grid {
+                grid-template-columns: 1fr;
+                gap: 20px;
+            }
+            
+            .card-body {
+                padding: 20px;
+            }
+            
+            .stats-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .loading-spinner {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(255,255,255,0.3);
+            border-radius: 50%;
+            border-top-color: white;
+            animation: spin 1s ease-in-out infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1><i class="fas fa-chart-line"></i> Trading Analyzer</h1>
+            <p>Analyseur de Trading Professionnel - Interface Web</p>
+        </div>
+
+        <div class="main-card">
+            <div class="card-header">
+                <h2><i class="fas fa-upload"></i> Analyse de Vos Fichiers de Trading</h2>
+                <p>Déposez vos fichiers Excel pour obtenir une analyse complète et détaillée</p>
+            </div>
+            
+            <div class="card-body">
+                <form id="uploadForm" enctype="multipart/form-data">
+                    <div class="upload-zone" onclick="document.getElementById('fileInput').click()">
+                        <div class="upload-icon">
+                            <i class="fas fa-cloud-upload-alt"></i>
+                        </div>
+                        <h3>Glissez vos fichiers ici</h3>
+                        <p>ou cliquez pour sélectionner vos fichiers Excel (.xlsx, .xls)</p>
+                        <button type="button" class="btn">
+                            <i class="fas fa-folder-open"></i>
+                            Sélectionner les fichiers
+                        </button>
+                        <input type="file" id="fileInput" name="files" multiple accept=".xlsx,.xls" class="file-input">
+                    </div>
+
+                    <div class="file-list" id="fileList"></div>
+
+                    <div class="options-grid">
+                        <div class="option-group">
+                            <label><i class="fas fa-filter"></i> Type d'analyse</label>
+                            <div class="radio-group">
+                                <div class="radio-option" onclick="selectOption(this, 'tous')">
+                                    <input type="radio" name="filter_type" value="tous" checked>
+                                    <span><i class="fas fa-globe"></i> Tous les instruments</span>
+                                </div>
+                                <div class="radio-option" onclick="selectOption(this, 'forex')">
+                                    <input type="radio" name="filter_type" value="forex">
+                                    <span><i class="fas fa-exchange-alt"></i> Forex uniquement</span>
+                                </div>
+                                <div class="radio-option" onclick="selectOption(this, 'autres')">
+                                    <input type="radio" name="filter_type" value="autres">
+                                    <span><i class="fas fa-chart-bar"></i> Autres instruments</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="option-group">
+                            <label for="soldeInitial"><i class="fas fa-euro-sign"></i> Solde initial</label>
+                            <input type="number" id="soldeInitial" name="solde_initial" value="10000" min="100" step="100" class="number-input" placeholder="Entrez votre solde initial">
+                        </div>
+                    </div>
+
+                    <div class="options-grid">
+                        <div class="option-group">
+                            <label for="multiplicateur"><i class="fas fa-times"></i> Multiplicateur</label>
+                            <input type="number" id="multiplicateur" name="multiplicateur" value="1" min="0.1" max="100" step="0.1" class="number-input" placeholder="Multiplicateur (défaut: 1)">
+                            <small style="color: #666; font-size: 0.9rem; margin-top: 5px; display: block;">
+                                Multiplie tous les profits/pertes par cette valeur (ex: 2 = double les gains/pertes)
+                            </small>
+                        </div>
+                    </div>
+
+                    <div style="text-align: center;">
+                        <button type="submit" class="btn btn-success" id="analyzeBtn">
+                            <i class="fas fa-play"></i>
+                            <span id="btnText">Lancer l'analyse</span>
+                            <div class="loading-spinner" id="loadingSpinner" style="display: none;"></div>
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Conteneur de progression -->
+        <div class="progress-container" id="progressContainer">
+            <div class="progress-header">
+                <h3><i class="fas fa-cogs"></i> Analyse en cours...</h3>
+                <p class="progress-status" id="progressStatus">Initialisation...</p>
+            </div>
+            <div class="progress-bar-container">
+                <div class="progress-bar" id="progressBar"></div>
+            </div>
+            <div class="progress-percentage" id="progressPercentage">0%</div>
+        </div>
+
+        <!-- Conteneur de résultats -->
+        <div class="results-container" id="resultsContainer">
+            <div class="results-header">
+                <div class="success-icon">
+                    <i class="fas fa-check-circle"></i>
+                </div>
+                <h3>Analyse terminée avec succès !</h3>
+            </div>
+            
+            <div class="stats-grid" id="statsGrid">
+                <!-- Les statistiques seront insérées ici dynamiquement -->
+            </div>
+
+            <div class="download-section">
+                <h4><i class="fas fa-download"></i> Télécharger le rapport complet</h4>
+                <p style="margin: 15px 0; color: #666;">Rapport Excel détaillé avec graphiques et analyses</p>
+                <a href="#" id="downloadLink" class="btn btn-success" style="text-decoration: none;">
+                    <i class="fas fa-file-excel"></i>
+                    Télécharger le rapport Excel
+                </a>
+            </div>
+
+            <!-- Filtres dynamiques -->
+            <div class="option-group" style="margin-top:20px">
+                <label><i class="fas fa-filter"></i> Filtres d'affichage</label>
+                <div style="display:grid; grid-template-columns:2fr 1fr 1fr; gap:14px; align-items:start;">
+                    <div>
+                        <div style="font-weight:600;color:#333;margin-bottom:6px">Paires</div>
+                        <div id="pairsChips" class="chips-container"></div>
+                        <div style="margin-top:8px; display:flex; gap:8px;">
+                            <button id="selectAllPairs" class="btn" type="button" style="padding:8px 12px; font-size:0.9rem">Tout sélectionner</button>
+                            <button id="clearPairs" class="btn" type="button" style="padding:8px 12px; font-size:0.9rem;">Vider</button>
+                        </div>
+                    </div>
+                    <div>
+                        <div style="font-weight:600;color:#333;margin-bottom:6px">Date début</div>
+                        <input type="date" id="dateStart" class="number-input" />
+                    </div>
+                    <div>
+                        <div style="font-weight:600;color:#333;margin-bottom:6px">Date fin</div>
+                        <input type="date" id="dateEnd" class="number-input" />
+                    </div>
+                </div>
+                <div style="margin-top:10px">
+                    <button id="applyFilters" class="btn btn-success" type="button"><i class="fas fa-sync"></i> Appliquer les filtres</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Conteneur d'erreur -->
+        <div class="error-container" id="errorContainer">
+            <div class="error-icon">
+                <i class="fas fa-exclamation-triangle"></i>
+            </div>
+            <div class="error-message" id="errorMessage"></div>
+        </div>
+
+        <div class="footer">
+            <p><i class="fas fa-shield-alt"></i> Vos données sont sécurisées et supprimées automatiquement après traitement</p>
+        </div>
+    </div>
+
+    <script>
+        let selectedFiles = [];
+        let currentTaskId = null;
+
+        // Gestion du drag & drop
+        const uploadZone = document.querySelector('.upload-zone');
+        const fileInput = document.getElementById('fileInput');
+        const fileList = document.getElementById('fileList');
+
+        uploadZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadZone.classList.add('dragover');
+        });
+
+        uploadZone.addEventListener('dragleave', () => {
+            uploadZone.classList.remove('dragover');
+        });
+
+        uploadZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadZone.classList.remove('dragover');
+            handleFiles(e.dataTransfer.files);
+        });
+
+        fileInput.addEventListener('change', (e) => {
+            handleFiles(e.target.files);
+        });
+
+        function handleFiles(files) {
+            console.log('handleFiles called with', files.length, 'files');
+            for (let file of files) {
+                console.log('Processing file:', file.name, 'type:', file.type);
+                if (file.type.includes('spreadsheet') || file.name.endsWith('.xlsx') || file.name.endsWith('.xls')) {
+                    if (!selectedFiles.find(f => f.name === file.name)) {
+                        selectedFiles.push(file);
+                        console.log('Added file:', file.name);
+                    } else {
+                        console.log('File already exists:', file.name);
+                    }
+                } else {
+                    console.log('File rejected (not Excel):', file.name);
+                }
+            }
+            console.log('Total selected files:', selectedFiles.length);
+            updateFileList();
+        }
+
+        function updateFileList() {
+            if (selectedFiles.length > 0) {
+                fileList.style.display = 'block';
+                fileList.innerHTML = '';
+                
+                selectedFiles.forEach((file, index) => {
+                    const fileItem = document.createElement('div');
+                    fileItem.className = 'file-item';
+                    fileItem.innerHTML = `
+                        <div class="file-info">
+                            <div class="file-icon">
+                                <i class="fas fa-file-excel"></i>
+                            </div>
+                            <div class="file-details">
+                                <h4>${file.name}</h4>
+                                <p>${formatFileSize(file.size)}</p>
+                            </div>
+                        </div>
+                        <button type="button" class="remove-file" onclick="removeFile(${index})">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    `;
+                    fileList.appendChild(fileItem);
+                });
+            } else {
+                fileList.style.display = 'none';
+            }
+        }
+
+        function removeFile(index) {
+            selectedFiles.splice(index, 1);
+            updateFileList();
+        }
+
+        function formatFileSize(bytes) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+
+        function selectOption(element, value) {
+            // Retirer la sélection des autres options
+            document.querySelectorAll('.radio-option').forEach(option => {
+                option.classList.remove('selected');
+            });
+            
+            // Sélectionner l'option cliquée
+            element.classList.add('selected');
+            element.querySelector('input[type="radio"]').checked = true;
+        }
+
+        // Sélectionner la première option par défaut
+        document.addEventListener('DOMContentLoaded', () => {
+            selectOption(document.querySelector('.radio-option'), 'tous');
+        });
+
+        // Gestion du formulaire
+        document.getElementById('uploadForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            console.log('Form submitted, selectedFiles:', selectedFiles.length);
+            
+            if (selectedFiles.length === 0) {
+                console.log('No files selected');
+                alert('Veuillez sélectionner au moins un fichier Excel.');
+                return;
+            }
+
+            const formData = new FormData();
+            selectedFiles.forEach(file => {
+                formData.append('files', file);
+            });
+            
+            formData.append('filter_type', document.querySelector('input[name="filter_type"]:checked').value);
+            formData.append('solde_initial', document.getElementById('soldeInitial').value);
+            formData.append('multiplicateur', document.getElementById('multiplicateur').value);
+
+            // Afficher le bouton de chargement
+            const btn = document.getElementById('analyzeBtn');
+            const btnText = document.getElementById('btnText');
+            const spinner = document.getElementById('loadingSpinner');
+            
+            btn.disabled = true;
+            btnText.textContent = 'Analyse en cours...';
+            spinner.style.display = 'inline-block';
+
+            // Masquer les conteneurs de résultats précédents
+            document.getElementById('resultsContainer').style.display = 'none';
+            document.getElementById('errorContainer').style.display = 'none';
+
+            try {
+                console.log('Sending request to /upload with', selectedFiles.length, 'files');
+                const response = await fetch('/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                console.log('Response status:', response.status);
+                const result = await response.json();
+                console.log('Response result:', result);
+
+                if (result.success) {
+                    currentTaskId = result.task_id;
+                    document.getElementById('progressContainer').style.display = 'block';
+                    checkProgress();
+                } else {
+                    showError(result.error);
+                }
+            } catch (error) {
+                console.error('Upload error:', error);
+                showError('Erreur de connexion: ' + error.message);
+            } finally {
+                // Restaurer le bouton
+                btn.disabled = false;
+                btnText.textContent = 'Lancer l\'analyse';
+                spinner.style.display = 'none';
+            }
+        });
+
+        async function checkProgress() {
+            if (!currentTaskId) return;
+
+            try {
+                const response = await fetch(`/status/${currentTaskId}`);
+                const status = await response.json();
+
+                const progressBar = document.getElementById('progressBar');
+                const progressPercentage = document.getElementById('progressPercentage');
+                const progressStatus = document.getElementById('progressStatus');
+
+                progressBar.style.width = status.progress + '%';
+                progressPercentage.textContent = status.progress + '%';
+                progressStatus.textContent = status.message;
+
+                if (status.success === true) {
+                    // Succès
+                    document.getElementById('progressContainer').style.display = 'none';
+                    showResults(status);
+                } else if (status.success === false) {
+                    // Erreur
+                    document.getElementById('progressContainer').style.display = 'none';
+                    showError(status.error);
+                } else {
+                    // En cours
+                    setTimeout(checkProgress, 1000);
+                }
+            } catch (error) {
+                showError('Erreur lors de la vérification du statut: ' + error.message);
+            }
+        }
+
+        function showResults(status) {
+            const stats = status.statistics;
+            const resultsContainer = document.getElementById('resultsContainer');
+            const statsGrid = document.getElementById('statsGrid');
+            const downloadLink = document.getElementById('downloadLink');
+
+            // Définir les cartes de statistiques
+            const statCards = [
+                {
+                    icon: 'fas fa-chart-line',
+                    value: stats.total_trades,
+                    label: 'Total Trades',
+                    color: '#667eea'
+                },
+                {
+                    icon: 'fas fa-euro-sign',
+                    value: `${stats.profit_compose.toLocaleString()} €`,
+                    label: 'Profit Composé',
+                    color: stats.profit_compose >= 0 ? '#56ab2f' : '#e53e3e'
+                },
+                {
+                    icon: 'fas fa-percentage',
+                    value: `${stats.rendement_pct}%`,
+                    label: 'Rendement',
+                    color: stats.rendement_pct >= 0 ? '#56ab2f' : '#e53e3e'
+                },
+                {
+                    icon: 'fas fa-target',
+                    value: `${stats.taux_reussite}%`,
+                    label: 'Taux Réussite',
+                    color: '#667eea'
+                },
+                {
+                    icon: 'fas fa-piggy-bank',
+                    value: `${stats.solde_final.toLocaleString()} €`,
+                    label: 'Solde Final',
+                    color: '#56ab2f'
+                },
+                {
+                    icon: 'fas fa-chart-bar',
+                    value: stats.pips_totaux.toLocaleString(),
+                    label: 'Pips/Points Totaux',
+                    color: stats.pips_totaux >= 0 ? '#56ab2f' : '#e53e3e'
+                },
+                {
+                    icon: 'fas fa-arrow-up',
+                    value: stats.trades_gagnants,
+                    label: 'Trades Gagnants',
+                    color: '#56ab2f'
+                },
+                {
+                    icon: 'fas fa-arrow-down',
+                    value: `${stats.drawdown_max}%`,
+                    label: 'Drawdown Max',
+                    color: '#e53e3e'
+                }
+            ];
+
+            // Générer les cartes de statistiques
+            statsGrid.innerHTML = statCards.map(card => `
+                <div class="stat-card">
+                    <div class="stat-icon" style="color: ${card.color}">
+                        <i class="${card.icon}"></i>
+                    </div>
+                    <div class="stat-value" style="color: ${card.color}">${card.value}</div>
+                    <div class="stat-label">${card.label}</div>
+                </div>
+            `).join('');
+
+            // Ajouter les graphiques dynamiques sous les cartes
+            const chartsHtml = `
+                <div class="accordion-section open">
+                    <div class="accordion-header" onclick="this.parentElement.classList.toggle('open')">
+                        <h4><i class="fas fa-chart-line"></i> Évolution de la somme cumulée</h4>
+                        <span class="accordion-toggle">▼</span>
+                    </div>
+                    <div class="accordion-content"><canvas id="chartEvolutionSomme"></canvas></div>
+                </div>
+                <div class="accordion-section">
+                    <div class="accordion-header" onclick="this.parentElement.classList.toggle('open')">
+                        <h4><i class=\"fas fa-globe\"></i> Performance par session (Total)</h4>
+                        <span class="accordion-toggle">▼</span>
+                    </div>
+                    <div class="accordion-content">
+                        <div style=\"display:grid; grid-template-columns:1fr 1fr; gap:20px;\">
+                            <div>
+                                <h5 style=\"margin-bottom:8px;color:#333\">Qualité des ouvertures (IN)</h5>
+                                <canvas id=\"chartSessionInWinrate\"></canvas>
+                            </div>
+                            <div>
+                                <h5 style=\"margin-bottom:8px;color:#333\">PnL attribué (au dernier OUT)</h5>
+                                <canvas id=\"chartSessionPnL\"></canvas>
+                            </div>
+                        </div>
+                        <div style=\"margin-top:20px; display:grid; grid-template-columns:1fr 1fr; gap:20px;\">
+                            <div>
+                                <h5 style=\"margin-bottom:8px;color:#333\">TP par session (au dernier OUT)</h5>
+                                <canvas id=\"chartSessionTP\"></canvas>
+                            </div>
+                            <div>
+                                <h5 style=\"margin-bottom:8px;color:#333\">SL par session (au dernier OUT)</h5>
+                                <canvas id=\"chartSessionSL\"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="accordion-section">
+                    <div class="accordion-header" onclick="this.parentElement.classList.toggle('open')">
+                        <h4><i class="fas fa-sign-in-alt"></i> Répartition des IN/OUT</h4>
+                        <span class="accordion-toggle">▼</span>
+                    </div>
+                    <div class="accordion-content">
+                        <h5 style="margin-bottom:8px;color:#333">Ouvertures (IN) par heure</h5>
+                        <canvas id="chartHeuresIN"></canvas>
+                        <h5 style="margin:16px 0 8px;color:#333">Fermetures (dernier OUT) par heure</h5>
+                        <canvas id="chartHeuresOUT"></canvas>
+                    </div>
+                </div>
+                <div class="accordion-section">
+                    <div class="accordion-header" onclick="this.parentElement.classList.toggle('open')">
+                        <h4><i class="fas fa-euro-sign"></i> Profits vs Pertes</h4>
+                        <span class="accordion-toggle">▼</span>
+                    </div>
+                    <div class="accordion-content">
+                        <h5 style="margin-bottom:8px;color:#333">Par heure</h5>
+                        <canvas id="chartProfitsPertesHeure"></canvas>
+                        <div style="margin-top:20px; display:grid; grid-template-columns:1fr 1fr; gap:20px;">
+                            <div>
+                                <h5 style="margin-bottom:8px;color:#333">Par jour</h5>
+                                <canvas id="chartProfitsPertesJour"></canvas>
+                            </div>
+                            <div>
+                                <h5 style="margin-bottom:8px;color:#333">Par mois</h5>
+                                <canvas id="chartProfitsPertesMois"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="accordion-section">
+                    <div class="accordion-header" onclick="this.parentElement.classList.toggle('open')">
+                        <h4><i class="fas fa-bullseye"></i> TP vs SL</h4>
+                        <span class="accordion-toggle">▼</span>
+                    </div>
+                    <div class="accordion-content">
+                        <h5 style="margin-bottom:8px;color:#333">Par heure</h5>
+                        <canvas id="chartTPSLHeure"></canvas>
+                        <div style="margin-top:20px; display:grid; grid-template-columns:1fr 1fr; gap:20px;">
+                            <div>
+                                <h5 style="margin-bottom:8px;color:#333">Par jour</h5>
+                                <canvas id="chartTPSLJour"></canvas>
+                            </div>
+                            <div>
+                                <h5 style="margin-bottom:8px;color:#333">Par mois</h5>
+                                <canvas id="chartTPSLMois"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="accordion-section">
+                    <div class="accordion-header" onclick="this.parentElement.classList.toggle('open')">
+                        <h4><i class="fas fa-hourglass-half"></i> Temps moyen des trades</h4>
+                        <span class="accordion-toggle">▼</span>
+                    </div>
+                    <div class="accordion-content"><div id="avgDuration" style="font-weight:600;color:#333"></div></div>
+                </div>
+            `;
+
+            // Configurer le lien de téléchargement
+            downloadLink.href = status.report_url;
+
+            resultsContainer.style.display = 'block';
+            // Injecter/mettre à jour la zone des graphiques (wrapper dédié)
+            let chartsWrapper = document.getElementById('chartsWrapper');
+            if (!chartsWrapper) {
+                chartsWrapper = document.createElement('div');
+                chartsWrapper.id = 'chartsWrapper';
+                resultsContainer.appendChild(chartsWrapper);
+            }
+            chartsWrapper.innerHTML = chartsHtml;
+
+            // Construire données heures IN/OUT
+            const heuresIn = stats.heures_in_counts || {};
+            const heuresOut = stats.heures_out_counts || {};
+            const hours = Array.from({length:24}, (_,i)=>i);
+            const dataIn = hours.map(h => heuresIn[h] || 0);
+            const dataOut = hours.map(h => heuresOut[h] || 0);
+
+            // Données sessions (total)
+            const sessionsTotal = stats.sessions_total || {};
+            const labelsSessions = ['Asie','Europe','Amérique'];
+            const inWinrate = labelsSessions.map(s => (sessionsTotal.taux_reussite_in_pct ? sessionsTotal.taux_reussite_in_pct[s] || 0 : 0));
+            const pnlSession = labelsSessions.map(s => (sessionsTotal.pnl_out ? sessionsTotal.pnl_out[s] || 0 : 0));
+            const tpSession = labelsSessions.map(s => (sessionsTotal.tp_out ? sessionsTotal.tp_out[s] || 0 : 0));
+            const slSession = labelsSessions.map(s => (sessionsTotal.sl_out ? sessionsTotal.sl_out[s] || 0 : 0));
+
+            // Évolution de la somme cumulée (EN PREMIER)
+            const ctxEvolution = document.getElementById('chartEvolutionSomme').getContext('2d');
+            const evolutionData = stats.evolution_somme_cumulee || [];
+            
+            if (evolutionData.length > 0) {
+                new Chart(ctxEvolution, {
+                    type: 'line',
+                    data: {
+                        labels: evolutionData.map(item => {
+                            const date = new Date(item.date);
+                            return date.toLocaleDateString('fr-FR') + ' ' + date.toLocaleTimeString('fr-FR', {hour: '2-digit', minute: '2-digit'});
+                        }),
+                        datasets: [{
+                            label: 'Solde cumulé (€)',
+                            data: evolutionData.map(item => item.solde),
+                            borderColor: 'rgba(102,126,234,1)',
+                            backgroundColor: 'rgba(102,126,234,0.1)',
+                            borderWidth: 2,
+                            fill: true,
+                            tension: 0.1
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        scales: {
+                            y: {
+                                beginAtZero: false,
+                                title: {
+                                    display: true,
+                                    text: 'Solde cumulé (€)'
+                                }
+                            },
+                            x: {
+                                title: {
+                                    display: true,
+                                    text: 'Date'
+                                }
+                            }
+                        },
+                        plugins: {
+                            legend: {
+                                display: true,
+                                position: 'top'
+                            }
+                        }
+                    }
+                });
+            } else {
+                // Si pas de données, afficher un message
+                document.getElementById('chartEvolutionSomme').style.display = 'none';
+                const evolutionDiv = document.querySelector('#chartEvolutionSomme').parentElement;
+                evolutionDiv.innerHTML += '<p style="color:#666;font-style:italic;">Aucune donnée d\'évolution disponible</p>';
+            }
+
+            // Graphiques sessions (Total)
+            const ctxSessIn = document.getElementById('chartSessionInWinrate').getContext('2d');
+            new Chart(ctxSessIn, {
+                type: 'bar',
+                data: { labels: labelsSessions, datasets: [{ label: 'Taux de réussite IN (%)', data: inWinrate, backgroundColor: ['#6687ea','#56ab2f','#e53e3e'].map(c=>c+'AA') }] },
+                options: { responsive: true, scales: { y: { beginAtZero: true, max: 100 } } }
+            });
+            const ctxSessPnL = document.getElementById('chartSessionPnL').getContext('2d');
+            new Chart(ctxSessPnL, {
+                type: 'bar',
+                data: { labels: labelsSessions, datasets: [{ label: 'PnL (€) au dernier OUT', data: pnlSession, backgroundColor: 'rgba(118,75,162,0.6)' }] },
+                options: { responsive: true, scales: { y: { beginAtZero: true } } }
+            });
+            const ctxSessTP = document.getElementById('chartSessionTP').getContext('2d');
+            new Chart(ctxSessTP, {
+                type: 'bar',
+                data: { labels: labelsSessions, datasets: [{ label: 'TP (nb)', data: tpSession, backgroundColor: 'rgba(86,171,47,0.7)' }] },
+                options: { responsive: true, scales: { y: { beginAtZero: true } } }
+            });
+            const ctxSessSL = document.getElementById('chartSessionSL').getContext('2d');
+            new Chart(ctxSessSL, {
+                type: 'bar',
+                data: { labels: labelsSessions, datasets: [{ label: 'SL (nb)', data: slSession, backgroundColor: 'rgba(229,62,62,0.7)' }] },
+                options: { responsive: true, scales: { y: { beginAtZero: true } } }
+            });
+
+            const ctxHin = document.getElementById('chartHeuresIN').getContext('2d');
+            new Chart(ctxHin, {
+                type: 'bar',
+                data: {
+                    labels: hours.map(h => `${h}h`),
+                    datasets: [{
+                        label: 'IN (comptage)',
+                        data: dataIn,
+                        backgroundColor: 'rgba(102,126,234,0.7)'
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: { legend: { display: true } },
+                    scales: { y: { beginAtZero: true } }
+                }
+            });
+
+            const ctxHout = document.getElementById('chartHeuresOUT').getContext('2d');
+            new Chart(ctxHout, {
+                type: 'bar',
+                data: {
+                    labels: hours.map(h => `${h}h`),
+                    datasets: [{
+                        label: 'OUT dernier (comptage)',
+                        data: dataOut,
+                        backgroundColor: 'rgba(86,171,47,0.7)'
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: { legend: { display: true } },
+                    scales: { y: { beginAtZero: true } }
+                }
+            });
+
+            // Profits vs Pertes par heure
+            const ph_pos = stats.profits_pos_par_heure_out || {};
+            const ph_neg = stats.pertes_abs_par_heure_out || stats.pertes_par_heure_out || {};
+            const ctxPPH = document.getElementById('chartProfitsPertesHeure').getContext('2d');
+            new Chart(ctxPPH, {
+                type: 'bar',
+                data: {
+                    labels: hours.map(h => `${h}h`),
+                    datasets: [
+                        { label: 'Profits (≥0)', data: hours.map(h => ph_pos[h] || 0), backgroundColor: 'rgba(86,171,47,0.7)' },
+                        { label: 'Pertes (≤0)', data: hours.map(h => ph_neg[h] || 0), backgroundColor: 'rgba(229,62,62,0.7)' }
+                    ]
+                },
+                options: { responsive: true, scales: { y: { beginAtZero: true } } }
+            });
+
+            // Profits vs pertes par jour
+            const jours = [0,1,2,3,4,5,6];
+            const pj_pos = stats.profits_pos_par_jour_out || {};
+            const pj_neg = stats.pertes_abs_par_jour_out || stats.pertes_par_jour_out || {};
+            const ctxPPJ = document.getElementById('chartProfitsPertesJour').getContext('2d');
+            new Chart(ctxPPJ, {
+                type: 'bar',
+                data: {
+                    labels: ['Lun','Mar','Mer','Jeu','Ven','Sam','Dim'],
+                    datasets: [
+                        { label: 'Profits (≥0)', data: jours.map(j => pj_pos[j] || 0), backgroundColor: 'rgba(86,171,47,0.7)' },
+                        { label: 'Pertes (≤0)', data: jours.map(j => pj_neg[j] || 0), backgroundColor: 'rgba(229,62,62,0.7)' }
+                    ]
+                },
+                options: { responsive: true, scales: { y: { beginAtZero: true } } }
+            });
+
+            // Profits vs pertes par mois
+            const mois = [1,2,3,4,5,6,7,8,9,10,11,12];
+            const pm_pos = stats.profits_pos_par_mois_out || {};
+            const pm_neg = stats.pertes_abs_par_mois_out || stats.pertes_par_mois_out || {};
+            const ctxPPM = document.getElementById('chartProfitsPertesMois').getContext('2d');
+            new Chart(ctxPPM, {
+                type: 'bar',
+                data: {
+                    labels: ['Jan','Fév','Mar','Avr','Mai','Juin','Juil','Aoû','Sep','Oct','Nov','Déc'],
+                    datasets: [
+                        { label: 'Profits (≥0)', data: mois.map(m => pm_pos[m] || 0), backgroundColor: 'rgba(86,171,47,0.7)' },
+                        { label: 'Pertes (≤0)', data: mois.map(m => pm_neg[m] || 0), backgroundColor: 'rgba(229,62,62,0.7)' }
+                    ]
+                },
+                options: { responsive: true, scales: { y: { beginAtZero: true } } }
+            });
+
+            // Durée moyenne
+            const avg = stats.duree_moyenne_minutes;
+            const median = stats.duree_mediane_minutes;
+            if (avg !== null && avg !== undefined) {
+                const el = document.getElementById('avgDuration');
+                const heures = Math.floor(avg / 60);
+                const minutes = Math.round(avg % 60);
+                const medHeures = median ? Math.floor(median / 60) : null;
+                const medMinutes = median ? Math.round(median % 60) : null;
+                el.textContent = heures > 0 ? `Moyenne: ${heures}h ${minutes}m` : `Moyenne: ${minutes} minutes`;
+                if (median !== null && median !== undefined) {
+                    el.textContent += medHeures > 0 ? ` | Médiane: ${medHeures}h ${medMinutes}m` : ` | Médiane: ${medMinutes} minutes`;
+                }
+            }
+
+            // TP vs SL par heure
+            const tp_h = stats.tp_par_heure || {}, sl_h = stats.sl_par_heure || {};
+            const ctxTPSLH = document.getElementById('chartTPSLHeure').getContext('2d');
+            new Chart(ctxTPSLH, {
+                type: 'bar',
+                data: {
+                    labels: hours.map(h => `${h}h`),
+                    datasets: [
+                        { label: 'TP (nb)', data: hours.map(h => tp_h[h] || 0), backgroundColor: 'rgba(86,171,47,0.7)' },
+                        { label: 'SL (nb)', data: hours.map(h => sl_h[h] || 0), backgroundColor: 'rgba(229,62,62,0.7)' }
+                    ]
+                },
+                options: { responsive: true, scales: { y: { beginAtZero: true } } }
+            });
+
+            const tp_d = stats.tp_par_jour || {}, sl_d = stats.sl_par_jour || {};
+            // TP vs SL par jour
+            const ctxTPSLJ = document.getElementById('chartTPSLJour').getContext('2d');
+            new Chart(ctxTPSLJ, {
+                type: 'bar',
+                data: {
+                    labels: ['Lun','Mar','Mer','Jeu','Ven','Sam','Dim'],
+                    datasets: [
+                        { label: 'TP (nb)', data: jours.map(j => tp_d[j] || 0), backgroundColor: 'rgba(86,171,47,0.7)' },
+                        { label: 'SL (nb)', data: jours.map(j => sl_d[j] || 0), backgroundColor: 'rgba(229,62,62,0.7)' }
+                    ]
+                },
+                options: { responsive: true, scales: { y: { beginAtZero: true } } }
+            });
+
+            const tp_m = stats.tp_par_mois || {}, sl_m = stats.sl_par_mois || {};
+            // TP vs SL par mois
+            const ctxTPSLM = document.getElementById('chartTPSLMois').getContext('2d');
+            new Chart(ctxTPSLM, {
+                type: 'bar',
+                data: {
+                    labels: ['Jan','Fév','Mar','Avr','Mai','Juin','Juil','Aoû','Sep','Oct','Nov','Déc'],
+                    datasets: [
+                        { label: 'TP (nb)', data: [1,2,3,4,5,6,7,8,9,10,11,12].map(m => tp_m[m] || 0), backgroundColor: 'rgba(86,171,47,0.7)' },
+                        { label: 'SL (nb)', data: [1,2,3,4,5,6,7,8,9,10,11,12].map(m => sl_m[m] || 0), backgroundColor: 'rgba(229,62,62,0.7)' }
+                    ]
+                },
+                options: { responsive: true, scales: { y: { beginAtZero: true } } }
+            });
+
+            // Remplir le sélecteur de paires
+            const pairsChips = document.getElementById('pairsChips');
+            let selectedPairs = new Set(stats.pairs || []);
+            if (pairsChips && stats.pairs) {
+                pairsChips.innerHTML = '';
+                (stats.pairs || []).forEach(p => {
+                    const chip = document.createElement('div');
+                    chip.className = 'chip selected';
+                    chip.textContent = p;
+                    chip.onclick = () => {
+                        if (selectedPairs.has(p)) {
+                            selectedPairs.delete(p); chip.classList.remove('selected');
+                        } else {
+                            selectedPairs.add(p); chip.classList.add('selected');
+                        }
+                    };
+                    pairsChips.appendChild(chip);
+                });
+            }
+            const getSelectedPairs = () => Array.from(selectedPairs);
+            document.getElementById('selectAllPairs').onclick = () => {
+                selectedPairs = new Set(stats.pairs || []);
+                document.querySelectorAll('#pairsChips .chip').forEach(c => c.classList.add('selected'));
+            };
+            document.getElementById('clearPairs').onclick = () => {
+                selectedPairs.clear();
+                document.querySelectorAll('#pairsChips .chip').forEach(c => c.classList.remove('selected'));
+                // Optionnel: appliquer immédiatement le filtre vide (toutes paires)
+                document.getElementById('applyFilters').click();
+            };
+            document.getElementById('applyFilters').onclick = async () => {
+                const payload = {
+                    pairs: getSelectedPairs(),
+                    date_start: document.getElementById('dateStart').value || null,
+                    date_end: document.getElementById('dateEnd').value || null
+                };
+                try {
+                    const resp = await fetch(`/filter_stats/${currentTaskId}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)});
+                    const data = await resp.json();
+                    if (data.success) {
+                        // Reconstruire uniquement les graphiques (réutilise showResults pour simplicité)
+                        status.statistics = data.statistics;
+                        showResults(status);
+                    } else {
+                        showError(data.error || 'Erreur lors du filtrage');
+                    }
+                } catch (e) {
+                    showError('Erreur réseau lors du filtrage: ' + e.message);
+                }
+            };
+
+            resultsContainer.scrollIntoView({ behavior: 'smooth' });
+        }
+
+        function showError(message) {
+            document.getElementById('progressContainer').style.display = 'none';
+            document.getElementById('errorMessage').textContent = message;
+            document.getElementById('errorContainer').style.display = 'block';
+            document.getElementById('errorContainer').scrollIntoView({ behavior: 'smooth' });
+        }
+    </script>
+</body>
+</html>
+</html>
