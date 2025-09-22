@@ -1,0 +1,86 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'Inter', system-ui, sans-serif; background: linear-gradient(135deg, #6c63ff 0%, #764ba2 100%); min-height: 100vh; padding: 20px; }
+/* Thème (cohérent WenBot) */
+:root {
+  --primary:#6c63ff;
+  --primary-2:#764ba2;
+  --accent:#56ab2f;
+  --accent-2:#8fd3f4;
+  --surface:#ffffff;
+  --surface-2:#f8f9ff;
+  --border:#e8ebff;
+  --text:#333;
+}
+
+/* Mise en page globale (rétrécir la largeur max pour un rendu plus élégant) */
+#root { padding: 0 16px; }
+.container { max-width: 1200px; margin: 0 auto; padding: 24px 0; }
+@media (max-width: 1240px) { .container { max-width: 980px; } }
+@media (max-width: 1024px) { .container { max-width: 860px; } }
+
+/* Boutons harmonisés + curseur */
+.btn {
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: linear-gradient(135deg, var(--primary) 0%, var(--primary-2) 100%);
+  color: #fff;
+  border: 0;
+  border-radius: 12px;
+  padding: 12px 22px;
+  font-weight: 600;
+  transition: transform .15s ease, box-shadow .15s ease, opacity .2s ease;
+}
+.btn:hover { transform: translateY(-1px); box-shadow: 0 10px 24px rgba(108,99,255,.35); }
+.btn:active { transform: translateY(0); box-shadow: none; }
+.btn[disabled] { opacity: .6; cursor: not-allowed; }
+
+.btn-success {
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-2) 100%);
+  color: #fff;
+}
+.btn-success:hover { box-shadow: 0 10px 24px rgba(86,171,47,.35); }
+
+/* Progress bar plus qualitative */
+.progress-bar { position: relative; background: linear-gradient(135deg, var(--primary) 0%, var(--primary-2) 100%); }
+.progress-bar::after {
+  content: '';
+  position: absolute; inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,.35), transparent);
+  animation: shimmer 1.5s infinite;
+}
+@keyframes shimmer { 0% { transform: translateX(-100%);} 100% { transform: translateX(100%);} }
+
+/* Accordéons: transition douce */
+.accordion { margin-top: 12px; }
+.accordion .section { border: 2px solid #e8ebff; border-radius: 10px; margin: 14px 0; overflow: hidden; background: #fff; }
+.accordion .header { background:#f8f9ff; cursor:pointer; padding:12px 16px; display:flex; align-items:center; gap:10px; }
+.accordion .content { max-height: 0; overflow: hidden; transition: max-height .35s ease; padding: 0 14px; }
+.accordion .section.open .content { max-height: 1200px; padding: 14px; }
+
+/* Upload zone cliquable */
+.upload-zone { cursor: pointer; border-color: var(--primary); background: var(--surface-2); }
+.upload-zone.dragover { background: #eef0ff; }
+
+/* Chips sélection paires */
+.chip { cursor: pointer; }
+.chip:hover { filter: brightness(0.97); }
+
+/* Bouton secondaire (Appliquer filtres / Télécharger) plus élégant */
+.btn-outline {
+  background: #fff;
+  color: var(--primary);
+  border: 2px solid #dce1ff;
+  border-radius: 12px;
+  padding: 10px 18px;
+  font-weight: 600;
+}
+.btn-outline:hover { box-shadow: 0 8px 20px rgba(102,126,234,.25); }
+
+/* Cartes (cohérence WenBot) */
+.main-card, .results-container, .option-group { background: var(--surface); border-radius: 20px; box-shadow: 0 20px 60px rgba(0,0,0,.08); }
+.option-group { border: 2px solid var(--border); background: var(--surface-2); }
+.stat-card { background: var(--surface-2); border: 2px solid var(--border); border-radius: 14px; }
+.header h1 { text-shadow: 2px 2px 4px rgba(0,0,0,.15); }
