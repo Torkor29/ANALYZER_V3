@@ -68,35 +68,33 @@ def process_files_background(task_id, file_paths, filter_type, solde_initial, mu
         
         df_final = analyzer.process_files(file_paths, task_id, task_status, filter_type)
 
-        # Appliquer le multiplicateur sur les profits et pips puis recalculer les cumuls
+        # Appliquer le multiplicateur uniquement sur les profits en € puis recalculer intégralement les colonnes dérivées
         try:
             m = float(multiplier or 1.0)
         except Exception:
             m = 1.0
-        if m != 1.0 and df_final is not None and len(df_final) > 0:
-            if 'Profit' in df_final.columns:
+        if df_final is not None and len(df_final) > 0:
+            if m != 1.0 and 'Profit' in df_final.columns:
                 df_final['Profit'] = df_final['Profit'].astype(float) * m
-            if 'Profit_pips' in df_final.columns:
+
+            # Recalcul complet via l'analyseur pour mettre à jour Profit_compose/Profit_cumule/Solde_cumule/Drawdown
+            try:
+                df_final = analyzer.fusionner_et_calculer_cumuls([df_final])
+            except Exception:
+                # Fallback minimal si jamais le recalcul complet échoue
                 try:
-                    df_final['Profit_pips'] = df_final['Profit_pips'].astype(float) * m
+                    if "Heure d'ouverture" in df_final.columns and 'Profit' in df_final.columns:
+                        tmp = df_final.copy()
+                        tmp['__dt'] = pd.to_datetime(tmp["Heure d'ouverture"], errors='coerce')
+                        tmp = tmp[tmp['__dt'].notna()].sort_values('__dt')
+                        tmp['__cum_profit'] = tmp['Profit'].astype(float).cumsum()
+                        df_final.loc[tmp.index, 'Profit_cumule'] = tmp['__cum_profit']
+                        if 'Profit_pips' in tmp.columns:
+                            tmp['__cum_pips'] = tmp['Profit_pips'].astype(float).cumsum()
+                            df_final.loc[tmp.index, 'Profit_pips_cumule'] = tmp['__cum_pips']
+                        df_final.loc[tmp.index, 'Solde_cumule'] = solde_initial + tmp['__cum_profit']
                 except Exception:
                     pass
-
-            # Recalcul cumuls en ordre chronologique
-            try:
-                if "Heure d'ouverture" in df_final.columns and 'Profit' in df_final.columns:
-                    tmp = df_final.copy()
-                    tmp['__dt'] = pd.to_datetime(tmp["Heure d'ouverture"], errors='coerce')
-                    tmp = tmp[tmp['__dt'].notna()].sort_values('__dt')
-                    tmp['__cum_profit'] = tmp['Profit'].astype(float).cumsum()
-                    df_final.loc[tmp.index, 'Profit_cumule'] = tmp['__cum_profit']
-                    if 'Profit_pips' in tmp.columns:
-                        tmp['__cum_pips'] = tmp['Profit_pips'].astype(float).cumsum()
-                        df_final.loc[tmp.index, 'Profit_pips_cumule'] = tmp['__cum_pips']
-                    # solde cumulé
-                    df_final.loc[tmp.index, 'Solde_cumule'] = solde_initial + tmp['__cum_profit']
-            except Exception:
-                pass
         
         if df_final is None or len(df_final) == 0:
             task_status[task_id]['success'] = False
@@ -142,13 +140,11 @@ def process_files_background(task_id, file_paths, filter_type, solde_initial, mu
         evolution_equity = []
         try:
             temp = df_final.copy()
-            if "Heure d'ouverture" in temp.columns and 'Profit' in temp.columns:
+            if "Heure d'ouverture" in temp.columns:
                 temp['__dt'] = pd.to_datetime(temp["Heure d'ouverture"], errors='coerce')
                 temp = temp[temp['__dt'].notna()].sort_values('__dt')
-                cumul = float(solde_initial)
                 for _, r in temp.iterrows():
-                    cumul += float(r['Profit']) if pd.notna(r['Profit']) else 0.0
-                    evolution_equity.append({'date': r['__dt'].isoformat(), 'solde': round(cumul, 2)})
+                    evolution_equity.append({'date': r['__dt'].isoformat(), 'solde': float(r.get('Solde_cumule', solde_initial))})
         except Exception:
             pass
 
