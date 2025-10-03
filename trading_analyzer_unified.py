@@ -2147,6 +2147,39 @@ class TradingAnalyzer:
                 cell.alignment = Alignment(horizontal="center")
             
             print(f"[DEBUG] Data sheet created with {len(df_final)} rows")
+
+            # === SURBRILLANCE: IN espacés de moins de 2 minutes (toutes les lignes du burst) ===
+            try:
+                if "Direction" in df_final.columns and "Heure d'ouverture" in df_final.columns:
+                    df_flag = df_final[["Direction", "Heure d'ouverture"]].copy()
+                    df_flag["__dt"] = pd.to_datetime(df_flag["Heure d'ouverture"], errors='coerce')
+                    # Travailler uniquement sur les IN ordonnés par date/heure
+                    df_in_only = df_flag[df_flag["Direction"].astype(str).str.lower() == "in"].copy()
+                    df_in_only = df_in_only.sort_values("__dt")
+                    # Diff vs précédent IN
+                    diffs = df_in_only["__dt"].diff()
+                    within_2min_curr = diffs <= pd.Timedelta(minutes=2)
+                    # Diff vs suivant IN (pour marquer le précédent aussi)
+                    diffs_next = df_in_only["__dt"].diff(periods=-1).abs()
+                    within_2min_prev = diffs_next <= pd.Timedelta(minutes=2)
+                    # Indices originaux en burst
+                    indices_burst = set(df_in_only.index[within_2min_curr.fillna(False)].tolist() +
+                                         df_in_only.index[within_2min_prev.fillna(False)].tolist())
+                    if indices_burst:
+                        # Construire un masque aligné sur l'ordre d'écriture (df_final_copy conserve l'ordre)
+                        mask_by_index = df_final.index.to_series().isin(indices_burst)
+                        # Appliquer un fond jaune sur chaque ligne concernée (ligne 1 = en-têtes)
+                        fill_yellow = PatternFill(start_color="FFF59D", end_color="FFF59D", fill_type="solid")
+                        num_rows = len(df_final_copy)
+                        num_cols = len(df_final_copy.columns)
+                        for i in range(num_rows):  # i = 0 correspond à la première ligne de données (row 2 dans Excel)
+                            if bool(mask_by_index.iloc[i]):
+                                excel_row = i + 2
+                                for j in range(1, num_cols + 1):
+                                    ws_data.cell(row=excel_row, column=j).fill = fill_yellow
+                        print(f"[DEBUG] Highlighted {sum(mask_by_index)} IN rows within 2 minutes bursts")
+            except Exception as e:
+                print(f"[WARNING] Failed to apply 2-min IN highlighting: {str(e)}")
             
             # === ONGLET 3: ANALYSE PAR INSTRUMENT ===
             if "Symbole_ordre" in df_final.columns:
