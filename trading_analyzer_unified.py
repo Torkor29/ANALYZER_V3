@@ -12,10 +12,13 @@ from openpyxl import Workbook
 from openpyxl.utils.dataframe import dataframe_to_rows
 from openpyxl.chart import LineChart, Reference, PieChart, BarChart
 from openpyxl.chart.label import DataLabelList
-from datetime import datetime
+from datetime import datetime, timedelta
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 from enum import Enum
+import requests
+
+# News économiques désactivées pour accélérer l'analyse
 
 class InstrumentType(Enum):
     FOREX = "forex"
@@ -28,6 +31,9 @@ class InstrumentType(Enum):
 class TradingAnalyzer:
     def __init__(self, solde_initial=10000):
         self.solde_initial = solde_initial
+        # Cache pour optimiser les appels API
+        self._api_cache = {}
+        self._cache_expiry = {}  # Timestamp d'expiration du cache
         self.statistiques_fichiers = {}
         
         # Configuration des symboles par type
@@ -43,6 +49,51 @@ class TradingAnalyzer:
         self.symboles_indices = ["dax", "cac", "sp500", "dow", "nasdaq", "ftse", "nikkei", "asx", "us30", "us500", "ger30", "fra40", "uk100", "ger40"]
         self.symboles_crypto = ["btc", "eth", "ltc", "xrp", "ada", "dot", "bitcoin", "ethereum", "crypto"]
         self.symboles_energie = ["oil", "wti", "brent", "petrol", "crude", "gas", "natural"]
+
+    # === TP/SL EXPLANATIONS HELPERS (FMP) ===
+    def _symbol_to_countries(self, symbole: str):
+        """Mappe un symbole vers un set de pays pertinents pour le calendrier économique."""
+        if not symbole:
+            return set()
+        s = str(symbole).upper()
+        forex_ccy = {
+            "USD": "United States",
+            "EUR": "Euro Area",
+            "GBP": "United Kingdom",
+            "JPY": "Japan",
+            "CHF": "Switzerland",
+            "CAD": "Canada",
+            "AUD": "Australia",
+            "NZD": "New Zealand",
+        }
+        countries = set()
+        # Forex 6-7 chars (EURUSD, USDJPY...)
+        if len(s) in (6, 7):
+            c1 = s[:3]
+            c2 = s[3:6]
+            if c1 in forex_ccy:
+                countries.add(forex_ccy[c1])
+            if c2 in forex_ccy:
+                countries.add(forex_ccy[c2])
+        # Indices
+        if any(k in s for k in ["GER40", "DAX", "GER30"]):
+            countries.add("Germany")
+        if any(k in s for k in ["FRA40", "CAC"]):
+            countries.add("France")
+        if any(k in s for k in ["US500", "SP500", "US30", "DOW", "NASDAQ"]):
+            countries.add("United States")
+        # Métaux/Commo -> souvent corrélés US
+        if any(k in s for k in ["XAU", "XAG", "GOLD", "SILVER", "OIL", "WTI", "BRENT"]):
+            countries.add("United States")
+        return countries
+
+    
+    
+
+    
+
+
+
     
     def process_files(self, file_paths, task_id, task_status, filter_type=None):
         """
@@ -2147,6 +2198,9 @@ class TradingAnalyzer:
                 cell.alignment = Alignment(horizontal="center")
             
             print(f"[DEBUG] Data sheet created with {len(df_final)} rows")
+
+            # === ONGLET TP/SL EXPLANATIONS SUPPRIMÉ ===
+            print("[INFO] Page TP/SL Explanations supprimée pour simplifier l'analyse")
 
             # === SURBRILLANCE: IN espacés de moins de 2 minutes (toutes les lignes du burst) ===
             try:

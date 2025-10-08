@@ -121,16 +121,16 @@ def process_files_background(task_id, file_paths, filter_type, solde_initial, mu
             aggs = {}
             sessions = {}
         
-        # Calculer les statistiques finales
-        total_trades = len(df_final)
+        # Calculer les statistiques finales basées sur les trades complets
+        trades_gagnants, trades_perdants, trades_neutres, total_trades = analyzer.calculer_trades_par_resultat(df_final)
+        
         profit_total = df_final['Profit'].sum()
         profit_compose = df_final['Profit_cumule'].iloc[-1] if len(df_final) > 0 else 0
         pips_totaux = df_final['Profit_pips_cumule'].iloc[-1] if len(df_final) > 0 else 0
         solde_final = df_final['Solde_cumule'].iloc[-1] if len(df_final) > 0 else solde_initial
         rendement_pct = ((solde_final - solde_initial) / solde_initial * 100)
         
-        trades_gagnants = len(df_final[df_final["Profit"] > 0])
-        trades_perdants = len(df_final[df_final["Profit"] < 0])
+        # Calculer le taux de réussite basé sur les trades complets (sans les neutres)
         taux_reussite = (trades_gagnants / (trades_gagnants + trades_perdants) * 100) if (trades_gagnants + trades_perdants) > 0 else 0
         
         # Drawdown maximum
@@ -249,17 +249,20 @@ def filter_stats(task_id):
         aggs = analyzer.calculer_agregations_graphes(df)
         sessions = analyzer.calculer_performance_par_session(df)
 
-        # Recalcul intégral des statistiques
+        # Recalcul intégral des statistiques basées sur les trades complets
+        trades_gagnants, trades_perdants, trades_neutres, total_trades = analyzer.calculer_trades_par_resultat(df)
+        taux_reussite = (trades_gagnants / (trades_gagnants + trades_perdants) * 100) if (trades_gagnants + trades_perdants) > 0 else 0
+        
         stats = {
-            'total_trades': int(len(df)),
+            'total_trades': int(total_trades),
             'profit_total': round(float(df['Profit'].sum()), 2) if 'Profit' in df.columns else 0.0,
             'profit_compose': 0.0,
             'pips_totaux': 0.0,
             'solde_final': 0.0,
             'rendement_pct': 0.0,
-            'trades_gagnants': int((df['Profit'] > 0).sum()) if 'Profit' in df.columns else 0,
-            'trades_perdants': int((df['Profit'] < 0).sum()) if 'Profit' in df.columns else 0,
-            'taux_reussite': 0.0,
+            'trades_gagnants': int(trades_gagnants),
+            'trades_perdants': int(trades_perdants),
+            'taux_reussite': round(taux_reussite, 1),
             'drawdown_max': 0.0,
             'heures_in_counts': aggs.get('heures_in_counts').to_dict() if aggs.get('heures_in_counts') is not None and hasattr(aggs.get('heures_in_counts'), 'to_dict') else {},
             'heures_out_counts': aggs.get('heures_out_counts').to_dict() if aggs.get('heures_out_counts') is not None and hasattr(aggs.get('heures_out_counts'), 'to_dict') else {},
