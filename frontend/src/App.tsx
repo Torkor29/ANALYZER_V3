@@ -219,15 +219,19 @@ export const App: React.FC = () => {
 
   // Charger la liste des brokers disponibles au montage
   React.useEffect(() => {
+    console.log('[DEBUG] Chargement des brokers...')
     axios.get('/api/brokers')
       .then(res => {
+        console.log('[DEBUG] Réponse /api/brokers:', res.data)
         if (res.data?.success && Array.isArray(res.data.brokers)) {
+          console.log('[DEBUG] Brokers trouvés:', res.data.brokers)
           setAvailableBrokers(res.data.brokers)
+        } else {
+          console.warn('[DEBUG] Format de réponse invalide:', res.data)
         }
       })
       .catch((err) => {
-        // Ignorer les erreurs silencieusement
-        console.warn('Erreur chargement brokers:', err)
+        console.error('[DEBUG] Erreur chargement brokers:', err)
       })
   }, [])
 
