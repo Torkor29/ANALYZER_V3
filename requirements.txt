@@ -1,0 +1,6 @@
+Flask
+pandas
+openpyxl
+gunicorn
+Flask-Cors
+requests>=2.31.0
