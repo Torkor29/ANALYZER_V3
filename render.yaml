@@ -2,7 +2,7 @@ services:
   - type: web
     name: trading-analyzer
     env: python
-    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    buildCommand: chmod +x build.sh && ./build.sh
     startCommand: gunicorn app:app
     envVars:
       - key: FLASK_ENV
