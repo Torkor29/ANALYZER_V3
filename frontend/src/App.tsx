@@ -225,8 +225,9 @@ export const App: React.FC = () => {
           setAvailableBrokers(res.data.brokers)
         }
       })
-      .catch(() => {
+      .catch((err) => {
         // Ignorer les erreurs silencieusement
+        console.warn('Erreur chargement brokers:', err)
       })
   }, [])
 
