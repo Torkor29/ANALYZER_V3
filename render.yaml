@@ -2,7 +2,23 @@ services:
   - type: web
     name: trading-analyzer
     env: python
-    buildCommand: chmod +x build.sh && ./build.sh
+    buildCommand: |
+      # Installer Node.js via nvm si disponible, sinon utiliser la version système
+      if command -v node &> /dev/null; then
+        echo "Node.js trouvé: $(node --version)"
+        cd frontend && npm install && npm run build && cd ..
+      else
+        echo "⚠️  Node.js non disponible, tentative d'installation..."
+        # Essayer d'installer Node.js via nvm ou apt
+        export NVM_DIR="$HOME/.nvm" && [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" && nvm install node && nvm use node
+        if command -v node &> /dev/null; then
+          cd frontend && npm install && npm run build && cd ..
+        else
+          echo "❌ Impossible d'installer Node.js, le frontend ne sera pas buildé"
+        fi
+      fi
+      # Installer les dépendances Python
+      pip install --upgrade pip && pip install -r requirements.txt
     startCommand: gunicorn app:app
     envVars:
       - key: FLASK_ENV
