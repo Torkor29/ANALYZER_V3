@@ -17,6 +17,7 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 from enum import Enum
 import requests
+from broker_manager import get_broker_manager
 
 # News économiques désactivées pour accélérer l'analyse
 
@@ -29,7 +30,7 @@ class InstrumentType(Enum):
     ACTIONS = "actions"
 
 class TradingAnalyzer:
-    def __init__(self, solde_initial=10000, multiplier=1.0):
+    def __init__(self, solde_initial=10000, multiplier=1.0, broker=None):
         # Solde initial fourni par l'utilisateur
         self.solde_initial = solde_initial
         # Multiplicateur de taille de position (agit sur le volume, PAS sur le profit directement)
@@ -37,6 +38,9 @@ class TradingAnalyzer:
             self.multiplier = float(multiplier or 1.0)
         except Exception:
             self.multiplier = 1.0
+        # Broker pour utiliser les valeurs réelles
+        self.broker = broker
+        self.broker_manager = get_broker_manager() if broker else None
         # Cache pour optimiser les appels API
         self._api_cache = {}
         self._cache_expiry = {}  # Timestamp d'expiration du cache
@@ -722,92 +726,158 @@ class TradingAnalyzer:
                 # Calcul du profit selon le type d'instrument
                 if type_instrument == InstrumentType.FOREX:
                     # FOREX : Profit = (différence_prix / taille_pip) × volume × valeur_par_pip
-                    # Taille du pip : 0.0001 pour la plupart des paires (4 décimales)
-                    # Taille du pip : 0.01 pour les paires JPY (2-3 décimales)
-                    
-                    # Déterminer la taille de pip
-                    def _decimals(x):
-                        try:
-                            s = f"{float(x):.10f}".rstrip("0").rstrip(".")
-                            return len(s.split(".")[1]) if "." in s else 0
-                        except Exception:
-                            return 0
-                    
-                    nb_dec = max(_decimals(prix_in), _decimals(prix_out))
-                    if nb_dec >= 4:
-                        pip_size = 0.0001  # 4e décimale
-                    elif nb_dec in (2, 3):
-                        pip_size = 0.01    # 2e décimale (JPY)
+                    # Essayer d'utiliser les valeurs réelles du broker si disponible
+                    if self.broker_manager and self.broker:
+                        broker_pip_size = self.broker_manager.get_pip_size(self.broker, symbole)
+                        broker_pip_value = self.broker_manager.get_pip_value(self.broker, symbole, 'USD')
+                        
+                        if broker_pip_size is not None and broker_pip_value is not None:
+                            # Utiliser les valeurs réelles du broker
+                            pip_size = broker_pip_size
+                            # La valeur pip du broker est pour 1 lot, on doit l'ajuster au volume
+                            # Si volume = 0.1 lot, on multiplie par 0.1
+                            valeur_par_pip = broker_pip_value * (volume / 1.0)  # volume est déjà en lots
+                        else:
+                            # Fallback sur les valeurs par défaut
+                            def _decimals(x):
+                                try:
+                                    s = f"{float(x):.10f}".rstrip("0").rstrip(".")
+                                    return len(s.split(".")[1]) if "." in s else 0
+                                except Exception:
+                                    return 0
+                            
+                            nb_dec = max(_decimals(prix_in), _decimals(prix_out))
+                            if nb_dec >= 4:
+                                pip_size = 0.0001  # 4e décimale
+                            elif nb_dec in (2, 3):
+                                pip_size = 0.01    # 2e décimale (JPY)
+                            else:
+                                pip_size = 0.0001  # Par défaut
+                            
+                            symbole_lower = symbole.lower()
+                            if "jpy" in symbole_lower:
+                                valeur_par_pip = (volume * 1000.0) / prix_in
+                            else:
+                                valeur_par_pip = volume * 10.0
                     else:
-                        pip_size = 0.0001  # Par défaut
+                        # Pas de broker : utiliser les valeurs par défaut
+                        def _decimals(x):
+                            try:
+                                s = f"{float(x):.10f}".rstrip("0").rstrip(".")
+                                return len(s.split(".")[1]) if "." in s else 0
+                            except Exception:
+                                return 0
+                        
+                        nb_dec = max(_decimals(prix_in), _decimals(prix_out))
+                        if nb_dec >= 4:
+                            pip_size = 0.0001  # 4e décimale
+                        elif nb_dec in (2, 3):
+                            pip_size = 0.01    # 2e décimale (JPY)
+                        else:
+                            pip_size = 0.0001  # Par défaut
+                        
+                        symbole_lower = symbole.lower()
+                        if "jpy" in symbole_lower:
+                            valeur_par_pip = (volume * 1000.0) / prix_in
+                        else:
+                            valeur_par_pip = volume * 10.0
                     
                     # Calcul des pips
                     pips = abs(difference_prix) / pip_size
                     signe = 1 if difference_prix >= 0 else -1
                     pips_entiers = signe * int(pips)
                     
-                    # Valeur par pip selon le type de paire
-                    # Pour les paires JPY (USDJPY, EURJPY, etc.) : 
-                    # FORMULE STANDARD FX: Valeur pip = (Volume × 1000) / Prix_JPY
-                    # Cette formule donne la valeur en USD (standard FX)
-                    # Profit USD = Pips × (Volume × 1000) / Prix_JPY
-                    symbole_lower = symbole.lower()
-                    if "jpy" in symbole_lower:
-                        # Paires JPY : Formule standard FX en USD
-                        # Valeur pip USD = (Volume × 1000) / Prix_JPY
-                        valeur_par_pip = (volume * 1000.0) / prix_in
-                    else:
-                        # Autres paires Forex : 10 USD par pip par 0.1 lot
-                        valeur_par_pip = volume * 10.0
-                    
                     profit = pips_entiers * valeur_par_pip
-                    print(f"[DEBUG] Profit Forex {symbole_debug}: {pips_entiers} pips × {valeur_par_pip:.4f}USD/pip = {profit}USD")
+                    print(f"[DEBUG] Profit Forex {symbole_debug}: {pips_entiers} pips × {valeur_par_pip:.4f}USD/pip = {profit}USD (broker: {self.broker if self.broker else 'défaut'})")
                     return round(profit, 2)
                 
                 elif type_instrument == InstrumentType.METAUX:
-                    # MÉTAUX (Or, Argent) : Profit = différence_prix × volume × multiplicateur
-                    # Pour l'or (XAUUSD) : 1 point = 1 USD par 0.1 lot
-                    # Pour l'argent (XAGUSD) : 1 point = 0.5 USD par 0.1 lot
-                    if "gold" in symbole or "xau" in symbole or "or" in symbole:
-                        valeur_par_point = volume * 1.0  # 1 USD par 0.1 lot
-                    else:  # Argent
-                        valeur_par_point = volume * 0.5  # 0.5 USD par 0.1 lot
+                    # MÉTAUX (Or, Argent) : Profit = différence_prix × volume × valeur_par_point
+                    # Essayer d'utiliser les valeurs réelles du broker si disponible
+                    if self.broker_manager and self.broker:
+                        broker_pip_value = self.broker_manager.get_pip_value(self.broker, symbole, 'USD')
+                        if broker_pip_value is not None:
+                            # La valeur pip du broker est pour 1 lot, on doit l'ajuster au volume
+                            valeur_par_point = broker_pip_value * (volume / 1.0)
+                        else:
+                            # Fallback sur les valeurs par défaut
+                            if "gold" in symbole or "xau" in symbole or "or" in symbole:
+                                valeur_par_point = volume * 1.0  # 1 USD par 0.1 lot
+                            else:  # Argent
+                                valeur_par_point = volume * 0.5  # 0.5 USD par 0.1 lot
+                    else:
+                        # Pas de broker : utiliser les valeurs par défaut
+                        if "gold" in symbole or "xau" in symbole or "or" in symbole:
+                            valeur_par_point = volume * 1.0  # 1 USD par 0.1 lot
+                        else:  # Argent
+                            valeur_par_point = volume * 0.5  # 0.5 USD par 0.1 lot
                     
                     profit = difference_prix * valeur_par_point
                     return round(profit, 2)
                 
                 elif type_instrument == InstrumentType.INDICES:
-                    # INDICES : Profit = différence_prix × volume × multiplicateur
-                    # Analyse manuelle montre que UK100 utilise environ 1.15-1.17 USD par point par 0.1 lot
-                    # Pour UK100 spécifiquement, utiliser 1.17 USD par point par 0.1 lot
-                    # Pour les autres indices, utiliser 1 USD par point par 0.1 lot
-                    if "uk100" in symbole or "uk" in symbole:
-                        # UK100: 1.17 USD par point par 0.1 lot (basé sur l'analyse des données réelles)
-                        valeur_par_point = volume * 1.17
+                    # INDICES : Profit = différence_prix × volume × valeur_par_point
+                    # Essayer d'utiliser les valeurs réelles du broker si disponible
+                    if self.broker_manager and self.broker:
+                        broker_pip_value = self.broker_manager.get_pip_value(self.broker, symbole, 'USD')
+                        if broker_pip_value is not None:
+                            # La valeur pip du broker est pour 1 lot, on doit l'ajuster au volume
+                            valeur_par_point = broker_pip_value * (volume / 1.0)
+                        else:
+                            # Fallback sur les valeurs par défaut
+                            if "uk100" in symbole or "uk" in symbole:
+                                valeur_par_point = volume * 1.17
+                            else:
+                                valeur_par_point = volume * 1.0
                     else:
-                        # Autres indices: 1 USD par point par 0.1 lot
-                        valeur_par_point = volume * 1.0
+                        # Pas de broker : utiliser les valeurs par défaut
+                        if "uk100" in symbole or "uk" in symbole:
+                            valeur_par_point = volume * 1.17
+                        else:
+                            valeur_par_point = volume * 1.0
                     profit = difference_prix * valeur_par_point
-                    print(f"[DEBUG] Profit calculé pour {symbole_debug}: {difference_prix} points × {valeur_par_point}USD/point = {profit}USD")
+                    print(f"[DEBUG] Profit calculé pour {symbole_debug}: {difference_prix} points × {valeur_par_point}USD/point = {profit}USD (broker: {self.broker if self.broker else 'défaut'})")
                     return round(profit, 2)
                 
                 elif type_instrument == InstrumentType.ENERGIE:
-                    # ÉNERGIE (Pétrole) : Profit = différence_prix × volume × multiplicateur
-                    # 1 point = 1 USD par 0.1 lot
-                    valeur_par_point = volume * 1.0
+                    # ÉNERGIE (Pétrole) : Profit = différence_prix × volume × valeur_par_point
+                    # Essayer d'utiliser les valeurs réelles du broker si disponible
+                    if self.broker_manager and self.broker:
+                        broker_pip_value = self.broker_manager.get_pip_value(self.broker, symbole, 'USD')
+                        if broker_pip_value is not None:
+                            valeur_par_point = broker_pip_value * (volume / 1.0)
+                        else:
+                            valeur_par_point = volume * 1.0
+                    else:
+                        valeur_par_point = volume * 1.0
                     profit = difference_prix * valeur_par_point
                     return round(profit, 2)
                 
                 elif type_instrument == InstrumentType.CRYPTO:
-                    # CRYPTO : Profit = différence_prix × volume × multiplicateur
-                    # 1 point = 0.1 USD par 0.1 lot (plus volatil)
-                    valeur_par_point = volume * 0.1
+                    # CRYPTO : Profit = différence_prix × volume × valeur_par_point
+                    # Essayer d'utiliser les valeurs réelles du broker si disponible
+                    if self.broker_manager and self.broker:
+                        broker_pip_value = self.broker_manager.get_pip_value(self.broker, symbole, 'USD')
+                        if broker_pip_value is not None:
+                            valeur_par_point = broker_pip_value * (volume / 1.0)
+                        else:
+                            valeur_par_point = volume * 0.1
+                    else:
+                        valeur_par_point = volume * 0.1
                     profit = difference_prix * valeur_par_point
                     return round(profit, 2)
                 
                 else:
-                    # ACTIONS et autres : 1 point = 1 USD par 0.1 lot
-                    valeur_par_point = volume * 1.0
+                    # ACTIONS et autres : Profit = différence_prix × volume × valeur_par_point
+                    # Essayer d'utiliser les valeurs réelles du broker si disponible
+                    if self.broker_manager and self.broker:
+                        broker_pip_value = self.broker_manager.get_pip_value(self.broker, symbole, 'USD')
+                        if broker_pip_value is not None:
+                            valeur_par_point = broker_pip_value * (volume / 1.0)
+                        else:
+                            valeur_par_point = volume * 1.0
+                    else:
+                        valeur_par_point = volume * 1.0
                     profit = difference_prix * valeur_par_point
                     return round(profit, 2)
             
@@ -854,21 +924,41 @@ class TradingAnalyzer:
                         
                         # Conversion pips/points selon règles demandées
                         if type_instrument == InstrumentType.FOREX:
-                            # Déterminer la taille de pip à partir du nombre de décimales des prix
-                            def _decimals(x):
-                                try:
-                                    s = f"{float(x):.10f}".rstrip("0").rstrip(".")
-                                    return len(s.split(".")[1]) if "." in s else 0
-                                except Exception:
-                                    return 0
-                            nb_dec = max(_decimals(prix_in), _decimals(prix_out))
-                            if nb_dec >= 4:
-                                pip_size = 0.0001  # 4e décimale, 5e ignorée (pipette)
-                            elif nb_dec in (2, 3):
-                                pip_size = 0.01    # 2e décimale
+                            # Essayer d'utiliser la taille de pip du broker si disponible
+                            if self.broker_manager and self.broker:
+                                broker_pip_size = self.broker_manager.get_pip_size(self.broker, symbole)
+                                if broker_pip_size is not None:
+                                    pip_size = broker_pip_size
+                                else:
+                                    # Fallback : déterminer la taille de pip à partir du nombre de décimales des prix
+                                    def _decimals(x):
+                                        try:
+                                            s = f"{float(x):.10f}".rstrip("0").rstrip(".")
+                                            return len(s.split(".")[1]) if "." in s else 0
+                                        except Exception:
+                                            return 0
+                                    nb_dec = max(_decimals(prix_in), _decimals(prix_out))
+                                    if nb_dec >= 4:
+                                        pip_size = 0.0001  # 4e décimale, 5e ignorée (pipette)
+                                    elif nb_dec in (2, 3):
+                                        pip_size = 0.01    # 2e décimale
+                                    else:
+                                        pip_size = 0.0001
                             else:
-                                # Fallback: par défaut considérer 0.0001
-                                pip_size = 0.0001
+                                # Pas de broker : déterminer la taille de pip à partir du nombre de décimales des prix
+                                def _decimals(x):
+                                    try:
+                                        s = f"{float(x):.10f}".rstrip("0").rstrip(".")
+                                        return len(s.split(".")[1]) if "." in s else 0
+                                    except Exception:
+                                        return 0
+                                nb_dec = max(_decimals(prix_in), _decimals(prix_out))
+                                if nb_dec >= 4:
+                                    pip_size = 0.0001  # 4e décimale, 5e ignorée (pipette)
+                                elif nb_dec in (2, 3):
+                                    pip_size = 0.01    # 2e décimale
+                                else:
+                                    pip_size = 0.0001
 
                             pips_floats = abs(points_bruts) / pip_size
                             pips_entiers = int(pips_floats)  # ignorer les pipettes (pipettes non comptées)
@@ -882,9 +972,15 @@ class TradingAnalyzer:
             # Fallback : calcul basé sur le profit avec valeurs réalistes
             # ATTENTION: Ce fallback ne devrait normalement pas être utilisé si le matching fonctionne
             if type_instrument == InstrumentType.FOREX:
-                # Valeurs réalistes pour le Forex (basées sur des spreads typiques)
-                # On garde l'approximation de 10 USD/pip par 0.1 lot comme fallback
-                valeur_pip = volume * 10.0
+                # Essayer d'utiliser les valeurs réelles du broker si disponible
+                if self.broker_manager and self.broker:
+                    broker_pip_value = self.broker_manager.get_pip_value(self.broker, symbole, 'USD')
+                    if broker_pip_value is not None:
+                        valeur_pip = broker_pip_value * (volume / 1.0)
+                    else:
+                        valeur_pip = volume * 10.0
+                else:
+                    valeur_pip = volume * 10.0
                 
                 if valeur_pip != 0:
                     pips_calcules = round(profit / valeur_pip, 2)
@@ -892,8 +988,15 @@ class TradingAnalyzer:
                     return pips_calcules
             else:
                 # Pour les autres instruments, calculer les points à partir du profit
-                # 1 point = 1 USD par 0.1 lot pour la plupart des instruments
-                valeur_point = volume * 1.0
+                # Essayer d'utiliser les valeurs réelles du broker si disponible
+                if self.broker_manager and self.broker:
+                    broker_pip_value = self.broker_manager.get_pip_value(self.broker, symbole, 'USD')
+                    if broker_pip_value is not None:
+                        valeur_point = broker_pip_value * (volume / 1.0)
+                    else:
+                        valeur_point = volume * 1.0
+                else:
+                    valeur_point = volume * 1.0
                 
                 if valeur_point != 0:
                     points_calcules = round(profit / valeur_point, 2)

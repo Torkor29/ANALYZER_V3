@@ -39,6 +39,8 @@ export const App: React.FC = () => {
   const [dateStart, setDateStart] = useState<string>('')
   const [dateEnd, setDateEnd] = useState<string>('')
   const [multiplier, setMultiplier] = useState<string>('1')
+  const [broker, setBroker] = useState<string>('')
+  const [availableBrokers, setAvailableBrokers] = useState<string[]>([])
   const pollingRef = useRef<number | null>(null)
 
   // Pré-calculs graphiques pour éviter les IIFE dans le JSX
@@ -215,6 +217,19 @@ export const App: React.FC = () => {
 
   const canAnalyze = useMemo(() => files.length > 0, [files])
 
+  // Charger la liste des brokers disponibles au montage
+  React.useEffect(() => {
+    axios.get('/api/brokers')
+      .then(res => {
+        if (res.data?.success && Array.isArray(res.data.brokers)) {
+          setAvailableBrokers(res.data.brokers)
+        }
+      })
+      .catch(() => {
+        // Ignorer les erreurs silencieusement
+      })
+  }, [])
+
   function onFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     if (!e.target.files) return
     setFiles(Array.from(e.target.files))
@@ -255,6 +270,9 @@ export const App: React.FC = () => {
     form.append('filter_type', filter)
     form.append('solde_initial', solde)
     form.append('multiplier', multiplier)
+    if (broker) {
+      form.append('broker', broker)
+    }
     try {
       const { data } = await axios.post<AnalyzeResponse>('/api/analyze', form, {
         headers: { 'Content-Type': 'multipart/form-data' }
@@ -398,6 +416,19 @@ export const App: React.FC = () => {
                 <option value="4">x4</option>
                 <option value="5">x5</option>
               </select>
+              <div style={{ height: 14 }} />
+              <label htmlFor="broker" style={{ fontWeight: 600, color: '#333', marginBottom: 8, display: 'block' }}><i className="fas fa-building" /> Broker (optionnel)</label>
+              <select id="broker" value={broker} onChange={e => setBroker(e.target.value)} style={{ width: '100%', padding: 12, border: '2px solid #e8ebff', borderRadius: 10 }}>
+                <option value="">Aucun (valeurs par défaut)</option>
+                {availableBrokers.map(b => (
+                  <option key={b} value={b}>{b.charAt(0).toUpperCase() + b.slice(1)}</option>
+                ))}
+              </select>
+              {broker && (
+                <p style={{ fontSize: '0.85rem', color: '#666', marginTop: 8, marginBottom: 0 }}>
+                  <i className="fas fa-info-circle" /> Utilise les valeurs réelles du broker {broker}
+                </p>
+              )}
             </div>
           </div>
 

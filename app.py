@@ -14,6 +14,7 @@ from datetime import datetime
 import shutil
 from werkzeug.utils import secure_filename
 from trading_analyzer_unified import TradingAnalyzer
+from broker_manager import get_broker_manager
 import pandas as pd
 
 app = Flask(__name__)
@@ -52,7 +53,7 @@ def cleanup_old_files():
                         except Exception:
                             pass
 
-def process_files_background(task_id, file_paths, filter_type, solde_initial, multiplier):
+def process_files_background(task_id, file_paths, filter_type, solde_initial, multiplier, broker=None):
     """Traite les fichiers en arrière-plan"""
     try:
         # Initialiser le statut de la tâche
@@ -65,9 +66,9 @@ def process_files_background(task_id, file_paths, filter_type, solde_initial, mu
         except Exception:
             m = 1.0
         
-        # Créer l'analyseur avec le solde initial fourni par l'utilisateur
-        # et le multiplicateur de taille de position
-        analyzer = TradingAnalyzer(solde_initial=solde_initial, multiplier=m)
+        # Créer l'analyseur avec le solde initial fourni par l'utilisateur,
+        # le multiplicateur de taille de position et le broker
+        analyzer = TradingAnalyzer(solde_initial=solde_initial, multiplier=m, broker=broker)
         
         # Traiter les fichiers
         task_status[task_id]['progress'] = 20
@@ -421,6 +422,16 @@ def spa(path: str):
 def api_health():
     return jsonify({"status": "ok"})
 
+@app.route('/api/brokers')
+def api_brokers():
+    """Liste tous les brokers disponibles"""
+    try:
+        broker_manager = get_broker_manager()
+        brokers = broker_manager.list_available_brokers()
+        return jsonify({"success": True, "brokers": brokers})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
 @app.route('/api/analyze', methods=['POST'])
 def api_analyze():
     # délègue à la logique d'upload existante
@@ -462,6 +473,11 @@ def upload_files():
         except ValueError:
             multiplier = 1
         
+        # Récupérer le broker (optionnel)
+        broker = request.form.get('broker', '').strip()
+        if broker == '':
+            broker = None
+        
         # Sauvegarder les fichiers
         file_paths = []
         for file in files:
@@ -485,13 +501,14 @@ def upload_files():
             'success': None,
             'error': None,
             'solde_initial': solde_initial,
-            'multiplier': multiplier
+            'multiplier': multiplier,
+            'broker': broker
         }
         
         # Lancer le traitement en arrière-plan
         thread = threading.Thread(
             target=process_files_background,
-            args=(task_id, file_paths, filter_type, solde_initial, multiplier)
+            args=(task_id, file_paths, filter_type, solde_initial, multiplier, broker)
         )
         thread.daemon = True
         thread.start()
