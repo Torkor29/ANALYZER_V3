@@ -17,6 +17,7 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 from enum import Enum
 import requests
+from broker_manager import get_broker_manager
 
 # News économiques désactivées pour accélérer l'analyse
 
@@ -29,8 +30,17 @@ class InstrumentType(Enum):
     ACTIONS = "actions"
 
 class TradingAnalyzer:
-    def __init__(self, solde_initial=10000):
+    def __init__(self, solde_initial=10000, multiplier=1.0, broker=None):
+        # Solde initial fourni par l'utilisateur
         self.solde_initial = solde_initial
+        # Multiplicateur de taille de position (agit sur le volume, PAS sur le profit directement)
+        try:
+            self.multiplier = float(multiplier or 1.0)
+        except Exception:
+            self.multiplier = 1.0
+        # Broker pour utiliser les valeurs réelles
+        self.broker = broker
+        self.broker_manager = get_broker_manager() if broker else None
         # Cache pour optimiser les appels API
         self._api_cache = {}
         self._cache_expiry = {}  # Timestamp d'expiration du cache
@@ -145,7 +155,9 @@ class TradingAnalyzer:
             task_status[task_id]['message'] = 'Fusion des données et calculs des intérêts composés...'
             
             print(f"[DEBUG] Starting fusion and compound interest calculations")
-            df_final = self.fusionner_et_calculer_cumuls(tous_les_resultats)
+            # On suppose que les profits dans Excel sont calculés avec un solde de référence de 10000
+            # Ce sera réajusté dans app.py si nécessaire avec le multiplicateur
+            df_final = self.fusionner_et_calculer_cumuls(tous_les_resultats, solde_initial_reference=10000)
             print(f"[DEBUG] Fusion completed: {len(df_final)} total trades")
             
             task_status[task_id]['progress'] = 75
@@ -258,10 +270,33 @@ class TradingAnalyzer:
             df_in = fusion_df[(fusion_df["Direction"] == "in") & (fusion_df["Cle_Match"].notna())].copy()
             if len(df_in) > 0:
                 df_in = df_in.set_index("Cle_Match")
+            else:
+                # Créer un DataFrame vide avec index vide si aucun trade d'entrée
+                df_in = pd.DataFrame()
 
-            # Calcul des pips/points selon le type d'instrument
-            print(f"[DEBUG] Calculating pips/points...")
-            fusion_df["Profit_pips"] = fusion_df.apply(lambda row: self.calculer_pips_ou_points(row, df_in), axis=1)
+            # RECALCUL MANUEL DES PROFITS ET PIPS
+            print(f"[DEBUG] Recalcul manuel des profits et pips...")
+            try:
+                fusion_df["Profit_recalcule"] = fusion_df.apply(lambda row: self.recalculer_profit_manuel(row, df_in), axis=1)
+                fusion_df["Profit_pips"] = fusion_df.apply(lambda row: self.calculer_pips_ou_points(row, df_in), axis=1)
+            except Exception as e:
+                print(f"[ERROR] Erreur lors du recalcul manuel: {str(e)}")
+                import traceback
+                print(f"[ERROR] Traceback: {traceback.format_exc()}")
+                # Continuer avec les profits Excel si le recalcul échoue
+                fusion_df["Profit_recalcule"] = None
+                fusion_df["Profit_pips"] = None
+            
+            # Utiliser le profit recalculé si disponible, sinon garder celui d'Excel
+            # FORCER l'utilisation du profit recalculé pour tous les trades de sortie avec matching
+            fusion_df["Profit"] = fusion_df.apply(
+                lambda row: row["Profit_recalcule"] if pd.notna(row["Profit_recalcule"]) else row["Profit"], 
+                axis=1
+            )
+            
+            # Log pour vérifier combien de profits ont été recalculés
+            nb_recalcules = fusion_df["Profit_recalcule"].notna().sum()
+            print(f"[DEBUG] Profits recalculés: {nb_recalcules} sur {len(fusion_df)} trades")
             
             # Nettoyage et sélection des colonnes finales
             colonnes_a_garder = [
@@ -619,6 +654,242 @@ class TradingAnalyzer:
                 return None
         return None
     
+    def recalculer_profit_manuel(self, row, df_in):
+        """
+        Recalcule le profit manuellement en fonction du volume, des prix et du type d'instrument.
+        Formules correctes pour chaque type d'instrument.
+        """
+        try:
+            # Vérifier que les colonnes nécessaires existent
+            if "Symbole_ordre" not in row.index:
+                print(f"[WARNING] Colonne Symbole_ordre manquante")
+                return None
+            
+            symbole = str(row["Symbole_ordre"]).lower()
+            type_instrument = self.detecter_type_instrument(symbole)
+            
+            # Gestion du volume
+            if "Volume_ordre" not in row.index:
+                print(f"[WARNING] Colonne Volume_ordre manquante pour {symbole}")
+                return None
+            
+            volume_str = str(row["Volume_ordre"])
+            if "/" in volume_str:
+                volume_base = float(volume_str.split("/")[0].strip())
+            else:
+                volume_base = float(volume_str.strip())
+
+            # Appliquer le multiplicateur sur la taille de position (volume effectif)
+            volume = volume_base * self.multiplier
+            
+            # Si c'est un trade de sortie avec matching, on peut recalculer
+            if "Direction" not in row.index or row["Direction"] != "out":
+                return None
+                
+            if "Cle_Match" not in row.index:
+                return None
+                
+            cle = row["Cle_Match"]
+            if pd.notna(cle) and df_in is not None and len(df_in) > 0 and cle in df_in.index:
+                in_row = df_in.loc[cle]
+                
+                # Vérifier les colonnes nécessaires
+                if "Prix_transaction" not in in_row.index:
+                    print(f"[WARNING] Colonne Prix_transaction manquante dans in_row pour {symbole}")
+                    return None
+                if "Prix_transaction" not in row.index:
+                    print(f"[WARNING] Colonne Prix_transaction manquante dans row pour {symbole}")
+                    return None
+                if "Type_ordre" not in in_row.index:
+                    print(f"[WARNING] Type_ordre manquant pour {symbole}")
+                    return None
+                
+                prix_in = float(in_row["Prix_transaction"]) if pd.notna(in_row["Prix_transaction"]) else None
+                prix_out = float(row["Prix_transaction"]) if pd.notna(row["Prix_transaction"]) else None
+                
+                if prix_in is None or prix_out is None:
+                    print(f"[WARNING] Prix manquants pour {symbole}: IN={prix_in}, OUT={prix_out}")
+                    return None
+                
+                type_ordre = in_row["Type_ordre"]
+                
+                # DEBUG: Afficher les valeurs pour vérification
+                symbole_debug = row.get("Symbole_ordre", "unknown")
+                print(f"[DEBUG] Recalcul profit {symbole_debug}: IN={prix_in}, OUT={prix_out}, Type={type_ordre}, Volume_base={volume_base}, Volume_effectif={volume}")
+                
+                # Calcul de la différence de prix selon le type d'ordre
+                if type_ordre == "buy":
+                    difference_prix = prix_out - prix_in
+                else:  # sell
+                    difference_prix = prix_in - prix_out
+                
+                # Calcul du profit selon le type d'instrument
+                if type_instrument == InstrumentType.FOREX:
+                    # FOREX : Profit = (différence_prix / taille_pip) × volume × valeur_par_pip
+                    # Essayer d'utiliser les valeurs réelles du broker si disponible
+                    if self.broker_manager and self.broker:
+                        broker_pip_size = self.broker_manager.get_pip_size(self.broker, symbole)
+                        broker_pip_value = self.broker_manager.get_pip_value(self.broker, symbole, 'USD')
+                        
+                        if broker_pip_size is not None and broker_pip_value is not None:
+                            # Utiliser les valeurs réelles du broker
+                            pip_size = broker_pip_size
+                            # La valeur pip du broker est pour 1 lot, on doit l'ajuster au volume
+                            # Si volume = 0.1 lot, on multiplie par 0.1
+                            valeur_par_pip = broker_pip_value * (volume / 1.0)  # volume est déjà en lots
+                        else:
+                            # Fallback sur les valeurs par défaut
+                            def _decimals(x):
+                                try:
+                                    s = f"{float(x):.10f}".rstrip("0").rstrip(".")
+                                    return len(s.split(".")[1]) if "." in s else 0
+                                except Exception:
+                                    return 0
+                            
+                            nb_dec = max(_decimals(prix_in), _decimals(prix_out))
+                            if nb_dec >= 4:
+                                pip_size = 0.0001  # 4e décimale
+                            elif nb_dec in (2, 3):
+                                pip_size = 0.01    # 2e décimale (JPY)
+                            else:
+                                pip_size = 0.0001  # Par défaut
+                            
+                            symbole_lower = symbole.lower()
+                            if "jpy" in symbole_lower:
+                                valeur_par_pip = (volume * 1000.0) / prix_in
+                            else:
+                                valeur_par_pip = volume * 10.0
+                    else:
+                        # Pas de broker : utiliser les valeurs par défaut
+                        def _decimals(x):
+                            try:
+                                s = f"{float(x):.10f}".rstrip("0").rstrip(".")
+                                return len(s.split(".")[1]) if "." in s else 0
+                            except Exception:
+                                return 0
+                        
+                        nb_dec = max(_decimals(prix_in), _decimals(prix_out))
+                        if nb_dec >= 4:
+                            pip_size = 0.0001  # 4e décimale
+                        elif nb_dec in (2, 3):
+                            pip_size = 0.01    # 2e décimale (JPY)
+                        else:
+                            pip_size = 0.0001  # Par défaut
+                        
+                        symbole_lower = symbole.lower()
+                        if "jpy" in symbole_lower:
+                            valeur_par_pip = (volume * 1000.0) / prix_in
+                        else:
+                            valeur_par_pip = volume * 10.0
+                    
+                    # Calcul des pips
+                    pips = abs(difference_prix) / pip_size
+                    signe = 1 if difference_prix >= 0 else -1
+                    pips_entiers = signe * int(pips)
+                    
+                    profit = pips_entiers * valeur_par_pip
+                    print(f"[DEBUG] Profit Forex {symbole_debug}: {pips_entiers} pips × {valeur_par_pip:.4f}USD/pip = {profit}USD (broker: {self.broker if self.broker else 'défaut'})")
+                    return round(profit, 2)
+                
+                elif type_instrument == InstrumentType.METAUX:
+                    # MÉTAUX (Or, Argent) : Profit = différence_prix × volume × valeur_par_point
+                    # Essayer d'utiliser les valeurs réelles du broker si disponible
+                    if self.broker_manager and self.broker:
+                        broker_pip_value = self.broker_manager.get_pip_value(self.broker, symbole, 'USD')
+                        if broker_pip_value is not None:
+                            # La valeur pip du broker est pour 1 lot, on doit l'ajuster au volume
+                            valeur_par_point = broker_pip_value * (volume / 1.0)
+                        else:
+                            # Fallback sur les valeurs par défaut
+                            if "gold" in symbole or "xau" in symbole or "or" in symbole:
+                                valeur_par_point = volume * 1.0  # 1 USD par 0.1 lot
+                            else:  # Argent
+                                valeur_par_point = volume * 0.5  # 0.5 USD par 0.1 lot
+                    else:
+                        # Pas de broker : utiliser les valeurs par défaut
+                        if "gold" in symbole or "xau" in symbole or "or" in symbole:
+                            valeur_par_point = volume * 1.0  # 1 USD par 0.1 lot
+                        else:  # Argent
+                            valeur_par_point = volume * 0.5  # 0.5 USD par 0.1 lot
+                    
+                    profit = difference_prix * valeur_par_point
+                    return round(profit, 2)
+                
+                elif type_instrument == InstrumentType.INDICES:
+                    # INDICES : Profit = différence_prix × volume × valeur_par_point
+                    # Essayer d'utiliser les valeurs réelles du broker si disponible
+                    if self.broker_manager and self.broker:
+                        broker_pip_value = self.broker_manager.get_pip_value(self.broker, symbole, 'USD')
+                        if broker_pip_value is not None:
+                            # La valeur pip du broker est pour 1 lot, on doit l'ajuster au volume
+                            valeur_par_point = broker_pip_value * (volume / 1.0)
+                        else:
+                            # Fallback sur les valeurs par défaut
+                            if "uk100" in symbole or "uk" in symbole:
+                                valeur_par_point = volume * 1.17
+                            else:
+                                valeur_par_point = volume * 1.0
+                    else:
+                        # Pas de broker : utiliser les valeurs par défaut
+                        if "uk100" in symbole or "uk" in symbole:
+                            valeur_par_point = volume * 1.17
+                        else:
+                            valeur_par_point = volume * 1.0
+                    profit = difference_prix * valeur_par_point
+                    print(f"[DEBUG] Profit calculé pour {symbole_debug}: {difference_prix} points × {valeur_par_point}USD/point = {profit}USD (broker: {self.broker if self.broker else 'défaut'})")
+                    return round(profit, 2)
+                
+                elif type_instrument == InstrumentType.ENERGIE:
+                    # ÉNERGIE (Pétrole) : Profit = différence_prix × volume × valeur_par_point
+                    # Essayer d'utiliser les valeurs réelles du broker si disponible
+                    if self.broker_manager and self.broker:
+                        broker_pip_value = self.broker_manager.get_pip_value(self.broker, symbole, 'USD')
+                        if broker_pip_value is not None:
+                            valeur_par_point = broker_pip_value * (volume / 1.0)
+                        else:
+                            valeur_par_point = volume * 1.0
+                    else:
+                        valeur_par_point = volume * 1.0
+                    profit = difference_prix * valeur_par_point
+                    return round(profit, 2)
+                
+                elif type_instrument == InstrumentType.CRYPTO:
+                    # CRYPTO : Profit = différence_prix × volume × valeur_par_point
+                    # Essayer d'utiliser les valeurs réelles du broker si disponible
+                    if self.broker_manager and self.broker:
+                        broker_pip_value = self.broker_manager.get_pip_value(self.broker, symbole, 'USD')
+                        if broker_pip_value is not None:
+                            valeur_par_point = broker_pip_value * (volume / 1.0)
+                        else:
+                            valeur_par_point = volume * 0.1
+                    else:
+                        valeur_par_point = volume * 0.1
+                    profit = difference_prix * valeur_par_point
+                    return round(profit, 2)
+                
+                else:
+                    # ACTIONS et autres : Profit = différence_prix × volume × valeur_par_point
+                    # Essayer d'utiliser les valeurs réelles du broker si disponible
+                    if self.broker_manager and self.broker:
+                        broker_pip_value = self.broker_manager.get_pip_value(self.broker, symbole, 'USD')
+                        if broker_pip_value is not None:
+                            valeur_par_point = broker_pip_value * (volume / 1.0)
+                        else:
+                            valeur_par_point = volume * 1.0
+                    else:
+                        valeur_par_point = volume * 1.0
+                    profit = difference_prix * valeur_par_point
+                    return round(profit, 2)
+            
+            # Si pas de matching ou trade d'entrée, retourner None (garder profit Excel)
+            return None
+            
+        except Exception as e:
+            print(f"[ERROR] Erreur recalcul profit pour {row.get('Symbole_ordre', 'unknown')}: {str(e)}")
+            import traceback
+            print(f"[ERROR] Traceback: {traceback.format_exc()}")
+            return None
+    
     def calculer_pips_ou_points(self, row, df_in):
         """Calcul des pips (Forex) ou points (autres instruments) avec détection d'incohérences"""
         symbole = str(row["Symbole_ordre"]).lower()
@@ -628,15 +899,18 @@ class TradingAnalyzer:
         # Gestion du volume
         volume_str = str(row["Volume_ordre"])
         if "/" in volume_str:
-            volume = float(volume_str.split("/")[0].strip())
+            volume_base = float(volume_str.split("/")[0].strip())
         else:
-            volume = float(volume_str.strip())
+            volume_base = float(volume_str.strip())
+
+        # Appliquer le multiplicateur sur la taille de position (volume effectif)
+        volume = volume_base * getattr(self, "multiplier", 1.0)
         
         try:
             # Si c'est un trade de sortie avec matching
             if row["Direction"] == "out":
                 cle = row["Cle_Match"]
-                if pd.notna(cle) and len(df_in) > 0 and cle in df_in.index:
+                if pd.notna(cle) and df_in is not None and len(df_in) > 0 and cle in df_in.index:
                     in_row = df_in.loc[cle]
                     prix_in = in_row["Prix_transaction"]
                     prix_out = row["Prix_transaction"]
@@ -650,70 +924,84 @@ class TradingAnalyzer:
                         
                         # Conversion pips/points selon règles demandées
                         if type_instrument == InstrumentType.FOREX:
-                            # Déterminer la taille de pip à partir du nombre de décimales des prix
-                            def _decimals(x):
-                                try:
-                                    s = f"{float(x):.10f}".rstrip("0").rstrip(".")
-                                    return len(s.split(".")[1]) if "." in s else 0
-                                except Exception:
-                                    return 0
-                            nb_dec = max(_decimals(prix_in), _decimals(prix_out))
-                            if nb_dec >= 4:
-                                pip_size = 0.0001  # 4e décimale, 5e ignorée (pipette)
-                            elif nb_dec in (2, 3):
-                                pip_size = 0.01    # 2e décimale
+                            # Essayer d'utiliser la taille de pip du broker si disponible
+                            if self.broker_manager and self.broker:
+                                broker_pip_size = self.broker_manager.get_pip_size(self.broker, symbole)
+                                if broker_pip_size is not None:
+                                    pip_size = broker_pip_size
+                                else:
+                                    # Fallback : déterminer la taille de pip à partir du nombre de décimales des prix
+                                    def _decimals(x):
+                                        try:
+                                            s = f"{float(x):.10f}".rstrip("0").rstrip(".")
+                                            return len(s.split(".")[1]) if "." in s else 0
+                                        except Exception:
+                                            return 0
+                                    nb_dec = max(_decimals(prix_in), _decimals(prix_out))
+                                    if nb_dec >= 4:
+                                        pip_size = 0.0001  # 4e décimale, 5e ignorée (pipette)
+                                    elif nb_dec in (2, 3):
+                                        pip_size = 0.01    # 2e décimale
+                                    else:
+                                        pip_size = 0.0001
                             else:
-                                # Fallback: par défaut considérer 0.0001
-                                pip_size = 0.0001
+                                # Pas de broker : déterminer la taille de pip à partir du nombre de décimales des prix
+                                def _decimals(x):
+                                    try:
+                                        s = f"{float(x):.10f}".rstrip("0").rstrip(".")
+                                        return len(s.split(".")[1]) if "." in s else 0
+                                    except Exception:
+                                        return 0
+                                nb_dec = max(_decimals(prix_in), _decimals(prix_out))
+                                if nb_dec >= 4:
+                                    pip_size = 0.0001  # 4e décimale, 5e ignorée (pipette)
+                                elif nb_dec in (2, 3):
+                                    pip_size = 0.01    # 2e décimale
+                                else:
+                                    pip_size = 0.0001
 
                             pips_floats = abs(points_bruts) / pip_size
                             pips_entiers = int(pips_floats)  # ignorer les pipettes (pipettes non comptées)
                             signe = 1 if points_bruts >= 0 else -1
                             return signe * pips_entiers
                         else:
-                            # Pour les autres instruments, conserver les points bruts
+                            # Pour les autres instruments (indices, métaux, etc.), retourner les points bruts
+                            # 1 point = 1 point, pas de multiplication par 10
                             return round(points_bruts, 2)
             
             # Fallback : calcul basé sur le profit avec valeurs réalistes
+            # ATTENTION: Ce fallback ne devrait normalement pas être utilisé si le matching fonctionne
             if type_instrument == InstrumentType.FOREX:
-                # Valeurs réalistes pour le Forex (basées sur des spreads typiques)
-                # On garde l'approximation de 10€/pip par 0.1 lot comme fallback
-                valeur_pip = volume * 10.0
+                # Essayer d'utiliser les valeurs réelles du broker si disponible
+                if self.broker_manager and self.broker:
+                    broker_pip_value = self.broker_manager.get_pip_value(self.broker, symbole, 'USD')
+                    if broker_pip_value is not None:
+                        valeur_pip = broker_pip_value * (volume / 1.0)
+                    else:
+                        valeur_pip = volume * 10.0
+                else:
+                    valeur_pip = volume * 10.0
                 
                 if valeur_pip != 0:
                     pips_calcules = round(profit / valeur_pip, 2)
-                    print(f"[INFO] Calcul fallback pour {symbole}: {profit}€ / {valeur_pip}€ = {pips_calcules} pips")
+                    print(f"[WARNING] Calcul fallback pour {symbole}: {profit}USD / {valeur_pip}USD = {pips_calcules} pips")
                     return pips_calcules
             else:
-                # Valeurs réalistes pour les autres instruments
-                if type_instrument == InstrumentType.METAUX:
-                    # Or/Argent : 1 point = ~1€ pour 0.1 lot
-                    valeur_point = volume * 1.0
-                elif type_instrument == InstrumentType.INDICES:
-                    if "dax" in symbole or "ger30" in symbole or "ger40" in symbole:
-                        # DAX/GER30/GER40 : 1 point = ~1€ pour 0.1 lot
-                        valeur_point = volume * 1.0
-                    elif "cac" in symbole or "fra40" in symbole:
-                        # CAC40 : 1 point = ~1€ pour 0.1 lot
-                        valeur_point = volume * 1.0
-                    elif "sp500" in symbole or "us500" in symbole:
-                        # SP500 : 1 point = ~1€ pour 0.1 lot
-                        valeur_point = volume * 1.0
+                # Pour les autres instruments, calculer les points à partir du profit
+                # Essayer d'utiliser les valeurs réelles du broker si disponible
+                if self.broker_manager and self.broker:
+                    broker_pip_value = self.broker_manager.get_pip_value(self.broker, symbole, 'USD')
+                    if broker_pip_value is not None:
+                        valeur_point = broker_pip_value * (volume / 1.0)
                     else:
-                        # Autres indices : 1 point = ~1€ pour 0.1 lot
                         valeur_point = volume * 1.0
-                elif type_instrument == InstrumentType.CRYPTO:
-                    # Crypto : 1 point = ~0.1€ pour 0.1 lot
-                    valeur_point = volume * 0.1
-                elif type_instrument == InstrumentType.ENERGIE:
-                    # Pétrole : 1 point = ~1€ pour 0.1 lot
-                    valeur_point = volume * 1.0
                 else:
-                    # Actions : 1 point = ~1€ pour 0.1 lot
                     valeur_point = volume * 1.0
                 
                 if valeur_point != 0:
-                    return round(profit / valeur_point, 2)
+                    points_calcules = round(profit / valeur_point, 2)
+                    print(f"[WARNING] Calcul fallback pour {symbole}: {profit}USD / {valeur_point}USD = {points_calcules} points")
+                    return points_calcules
             
             return None
                 
@@ -721,9 +1009,17 @@ class TradingAnalyzer:
             print(f"[ERROR] Erreur calcul pips pour {symbole}: {str(e)}")
             return None
     
-    def fusionner_et_calculer_cumuls(self, tous_les_df):
-        """Fusionne tous les DataFrames et calcule les intérêts composés + drawdown"""
+    def fusionner_et_calculer_cumuls(self, tous_les_df, solde_initial_reference=10000):
+        """
+        Fusionne tous les DataFrames et calcule les intérêts composés + drawdown
+        
+        Args:
+            tous_les_df: Liste de DataFrames à fusionner
+            solde_initial_reference: Solde initial de référence utilisé pour calculer les profits dans Excel (par défaut 10000)
+                                    Si les profits dans Excel sont calculés avec un autre solde, ajuster ce paramètre
+        """
         print(f"[DEBUG] Starting fusion and compound calculations...")
+        print(f"[DEBUG] Solde initial utilisé: {self.solde_initial}, Solde de référence Excel: {solde_initial_reference}")
         
         # Fusionner tous les DataFrames
         df_complet = pd.concat(tous_les_df, ignore_index=True)
@@ -751,17 +1047,44 @@ class TradingAnalyzer:
         drawdown_running_max = 0.0
         
         print(f"[DEBUG] Starting compound interest calculations...")
+        print(f"[DEBUG] Solde initial: {self.solde_initial}, Solde référence Excel: {solde_initial_reference}")
+        
+        # Facteur d'ajustement si le solde initial diffère du solde de référence Excel
+        # Les profits dans Excel sont calculés avec solde_initial_reference
+        # On les ajuste proportionnellement au solde initial choisi par l'utilisateur
+        facteur_ajustement_solde = self.solde_initial / solde_initial_reference if solde_initial_reference > 0 else 1.0
+        print(f"[DEBUG] Facteur d'ajustement solde: {facteur_ajustement_solde}")
         
         for idx, row in df_complet.iterrows():
-            profit_original = row["Profit"] if pd.notna(row["Profit"]) else 0
-            pips = row["Profit_pips"] if pd.notna(row["Profit_pips"]) else 0
+            profit_original = float(row["Profit"]) if pd.notna(row["Profit"]) else 0.0
+            pips = float(row["Profit_pips"]) if pd.notna(row["Profit_pips"]) else 0.0
             
-            # Calculer le rendement en pourcentage
-            if profit_original != 0 and self.solde_initial != 0:
-                rendement_trade_pct = (profit_original / self.solde_initial) * 100
-                profit_compose = (rendement_trade_pct / 100) * solde_courant
+            # ÉTAPE 1: Ajuster le profit si le solde initial diffère du solde de référence Excel
+            # Les profits dans Excel sont calculés avec solde_initial_reference
+            # Si l'utilisateur change le solde initial, on ajuste proportionnellement
+            # Note: Le multiplicateur a déjà été appliqué dans app.py avant d'appeler cette fonction
+            profit_ajuste_solde = profit_original * facteur_ajustement_solde
+            
+            # ÉTAPE 2: Calcul des intérêts composés
+            # Le profit composé doit être calculé sur le solde COURANT (qui a été augmenté par les profits précédents)
+            # Cela crée l'effet d'intérêts composés : plus le solde est élevé, plus les profits suivants sont importants
+            # 
+            # Logique :
+            # - Les profits dans Excel sont calculés avec un solde de référence (solde_initial_reference)
+            # - Si le solde initial diffère, on ajuste proportionnellement (fait dans ÉTAPE 1)
+            # - Pour les intérêts composés, chaque profit suivant doit être proportionnel au solde COURANT
+            #   car les profits précédents ont augmenté le solde
+            #
+            # Formule : profit_compose = profit_ajuste_solde × (solde_courant / solde_initial_reference)
+            # Cela signifie que le profit est proportionnel au solde courant par rapport au solde de référence Excel
+            if solde_courant > 0 and solde_initial_reference > 0:
+                # Le profit composé est le profit ajusté multiplié par le ratio solde_courant/solde_initial_reference
+                # Cela crée l'effet d'intérêts composés : chaque profit suivant est calculé sur un solde plus élevé
+                ratio_solde_courant = solde_courant / solde_initial_reference
+                profit_compose = profit_ajuste_solde * ratio_solde_courant
             else:
-                profit_compose = 0
+                # Si le solde courant ou la référence est 0, on utilise simplement le profit ajusté
+                profit_compose = profit_ajuste_solde
             
             # Mise à jour des cumuls
             solde_courant += profit_compose
@@ -775,18 +1098,18 @@ class TradingAnalyzer:
             # Calcul du drawdown CLASSIQUE
             if solde_courant < plus_haut_solde:
                 drawdown_euros = plus_haut_solde - solde_courant
-                drawdown_pct = (drawdown_euros / plus_haut_solde * 100)
+                drawdown_pct = (drawdown_euros / plus_haut_solde * 100) if plus_haut_solde > 0 else 0.0
             else:
                 drawdown_euros = 0.0
                 drawdown_pct = 0.0
             
             # Calcul du drawdown RUNNING (lissé)
-            drawdown_actuel = (plus_haut_solde - solde_courant) / plus_haut_solde * 100
+            drawdown_actuel = (plus_haut_solde - solde_courant) / plus_haut_solde * 100 if plus_haut_solde > 0 else 0.0
             if drawdown_actuel > drawdown_running_max:
                 drawdown_running_max = drawdown_actuel
             
             if drawdown_actuel < drawdown_running_max:
-                if profit_original > 0:
+                if profit_ajuste_solde > 0:
                     drawdown_running_max = max(drawdown_actuel, drawdown_running_max * 0.9)
                 else:
                     drawdown_running_max = max(drawdown_actuel, drawdown_running_max)

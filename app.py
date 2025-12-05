@@ -14,6 +14,7 @@ from datetime import datetime
 import shutil
 from werkzeug.utils import secure_filename
 from trading_analyzer_unified import TradingAnalyzer
+from broker_manager import get_broker_manager
 import pandas as pd
 
 app = Flask(__name__)
@@ -52,35 +53,48 @@ def cleanup_old_files():
                         except Exception:
                             pass
 
-def process_files_background(task_id, file_paths, filter_type, solde_initial, multiplier):
+def process_files_background(task_id, file_paths, filter_type, solde_initial, multiplier, broker=None):
     """Traite les fichiers en arrière-plan"""
     try:
         # Initialiser le statut de la tâche
         task_status[task_id]['progress'] = 10
         task_status[task_id]['message'] = 'Initialisation de l\'analyseur...'
         
-        # Créer l'analyseur
-        analyzer = TradingAnalyzer(solde_initial=solde_initial)
+        # Récupérer le multiplicateur (taille de position)
+        try:
+            m = float(multiplier or 1.0)
+        except Exception:
+            m = 1.0
+        
+        # Créer l'analyseur avec le solde initial fourni par l'utilisateur,
+        # le multiplicateur de taille de position et le broker
+        analyzer = TradingAnalyzer(solde_initial=solde_initial, multiplier=m, broker=broker)
         
         # Traiter les fichiers
         task_status[task_id]['progress'] = 20
         task_status[task_id]['message'] = 'Traitement des fichiers...'
         
-        df_final = analyzer.process_files(file_paths, task_id, task_status, filter_type)
-
-        # Appliquer le multiplicateur uniquement sur les profits en € puis recalculer intégralement les colonnes dérivées
+        print(f"[DEBUG] Starting process_files with {len(file_paths)} files, multiplier={m}")
         try:
-            m = float(multiplier or 1.0)
-        except Exception:
-            m = 1.0
-        if df_final is not None and len(df_final) > 0:
-            if m != 1.0 and 'Profit' in df_final.columns:
-                df_final['Profit'] = df_final['Profit'].astype(float) * m
+            df_final = analyzer.process_files(file_paths, task_id, task_status, filter_type)
+        except Exception as e:
+            print(f"[ERROR] Exception dans process_files: {str(e)}")
+            import traceback
+            print(f"[ERROR] Traceback: {traceback.format_exc()}")
+            raise
 
-            # Recalcul complet via l'analyseur pour mettre à jour Profit_compose/Profit_cumule/Solde_cumule/Drawdown
+        # Recalcul complet via l'analyseur pour mettre à jour Profit_compose/Profit_cumule/Solde_cumule/Drawdown
+        # Le solde de référence Excel est par défaut 10000, mais peut être ajusté si nécessaire
+        if df_final is not None and len(df_final) > 0:
             try:
-                df_final = analyzer.fusionner_et_calculer_cumuls([df_final])
-            except Exception:
+                # On suppose que les profits dans Excel sont calculés avec un solde de référence de 10000
+                # Si l'utilisateur change le solde initial, on ajuste proportionnellement
+                solde_reference_excel = 10000.0
+                df_final = analyzer.fusionner_et_calculer_cumuls([df_final], solde_initial_reference=solde_reference_excel)
+            except Exception as e:
+                print(f"[ERROR] Erreur lors du recalcul des cumuls: {str(e)}")
+                import traceback
+                print(f"[ERROR] Traceback: {traceback.format_exc()}")
                 # Fallback minimal si jamais le recalcul complet échoue
                 try:
                     if "Heure d'ouverture" in df_final.columns and 'Profit' in df_final.columns:
@@ -89,11 +103,13 @@ def process_files_background(task_id, file_paths, filter_type, solde_initial, mu
                         tmp = tmp[tmp['__dt'].notna()].sort_values('__dt')
                         tmp['__cum_profit'] = tmp['Profit'].astype(float).cumsum()
                         df_final.loc[tmp.index, 'Profit_cumule'] = tmp['__cum_profit']
+                        df_final.loc[tmp.index, 'Profit_compose'] = tmp['Profit'].astype(float)
                         if 'Profit_pips' in tmp.columns:
                             tmp['__cum_pips'] = tmp['Profit_pips'].astype(float).cumsum()
                             df_final.loc[tmp.index, 'Profit_pips_cumule'] = tmp['__cum_pips']
                         df_final.loc[tmp.index, 'Solde_cumule'] = solde_initial + tmp['__cum_profit']
-                except Exception:
+                except Exception as e2:
+                    print(f"[ERROR] Erreur dans le fallback: {str(e2)}")
                     pass
         
         if df_final is None or len(df_final) == 0:
@@ -206,8 +222,12 @@ def process_files_background(task_id, file_paths, filter_type, solde_initial, mu
                 pass
                 
     except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        print(f"[ERROR] Erreur dans process_files_background: {str(e)}")
+        print(f"[ERROR] Traceback complet: {error_trace}")
         task_status[task_id]['success'] = False
-        task_status[task_id]['error'] = str(e)
+        task_status[task_id]['error'] = f'{str(e)}\n\n{error_trace}'
         task_status[task_id]['progress'] = 100
         task_status[task_id]['message'] = f'Erreur: {str(e)}'
 
@@ -245,7 +265,12 @@ def filter_stats(task_id):
                     pass
             df = df.drop(columns=['__dt'])
 
-        analyzer = TradingAnalyzer()
+        # Récupérer le solde initial et le multiplicateur de la tâche originale
+        solde_initial = float(task_status.get(task_id, {}).get('solde_initial', 10000) or 10000)
+        multiplier = float(task_status.get(task_id, {}).get('multiplier', 1.0) or 1.0)
+        
+        # Créer un analyseur avec le bon solde initial
+        analyzer = TradingAnalyzer(solde_initial=solde_initial)
         aggs = analyzer.calculer_agregations_graphes(df)
         sessions = analyzer.calculer_performance_par_session(df)
 
@@ -289,37 +314,67 @@ def filter_stats(task_id):
             'pairs': list(df['Symbole_ordre'].dropna().unique()) if 'Symbole_ordre' in df.columns else []
         }
 
-        # Recalcul cumuls/solde/drawdown/évolution
+        # Recalcul cumuls/solde/drawdown/évolution avec le bon solde initial
         if len(df) > 0 and 'Profit' in df.columns:
-            temp = df.copy()
-            temp['__dt'] = pd.to_datetime(temp.get("Heure d'ouverture"), errors='coerce')
-            temp = temp[temp['__dt'].notna()].sort_values('__dt')
-            temp['__cum_profit'] = temp['Profit'].cumsum()
-            stats['profit_compose'] = round(float(temp['__cum_profit'].iloc[-1]), 2)
+            # Utiliser les colonnes déjà calculées si disponibles, sinon recalculer
+            if 'Profit_cumule' in df.columns and 'Solde_cumule' in df.columns:
+                # Les colonnes sont déjà calculées, utiliser les valeurs finales
+                temp = df.copy()
+                temp['__dt'] = pd.to_datetime(temp.get("Heure d'ouverture"), errors='coerce')
+                temp = temp[temp['__dt'].notna()].sort_values('__dt')
+                
+                stats['profit_compose'] = round(float(temp['Profit_cumule'].iloc[-1]), 2) if len(temp) > 0 else 0.0
+                stats['solde_final'] = round(float(temp['Solde_cumule'].iloc[-1]), 2) if len(temp) > 0 else solde_initial
+                
+                if 'Profit_pips_cumule' in temp.columns:
+                    stats['pips_totaux'] = round(float(temp['Profit_pips_cumule'].iloc[-1]), 2) if len(temp) > 0 else 0.0
+                elif 'Profit_pips' in temp.columns:
+                    stats['pips_totaux'] = round(float(temp['Profit_pips'].sum()), 2)
+                
+                if 'Drawdown_pct' in temp.columns:
+                    stats['drawdown_max'] = round(float(temp['Drawdown_pct'].max()), 2) if len(temp) > 0 else 0.0
+                else:
+                    # Calculer le drawdown manuellement
+                    equity = temp['Solde_cumule'] if 'Solde_cumule' in temp.columns else (solde_initial + temp['Profit'].cumsum())
+                    peak = equity.cummax()
+                    dd = (peak - equity) / peak.replace(0, pd.NA) * 100
+                    stats['drawdown_max'] = round(float(dd.max(skipna=True) or 0), 2)
+                
+                # Série d'équity
+                evolution = []
+                for _, r in temp.iterrows():
+                    evolution.append({'date': r['__dt'].isoformat(), 'solde': round(float(r.get('Solde_cumule', solde_initial)), 2)})
+                stats['evolution_somme_cumulee'] = evolution
+            else:
+                # Recalcul simple si les colonnes ne sont pas disponibles
+                temp = df.copy()
+                temp['__dt'] = pd.to_datetime(temp.get("Heure d'ouverture"), errors='coerce')
+                temp = temp[temp['__dt'].notna()].sort_values('__dt')
+                temp['__cum_profit'] = temp['Profit'].cumsum()
+                stats['profit_compose'] = round(float(temp['__cum_profit'].iloc[-1]), 2) if len(temp) > 0 else 0.0
 
-            if 'Profit_pips' in temp.columns:
-                temp['__cum_pips'] = temp['Profit_pips'].cumsum()
-                stats['pips_totaux'] = round(float(temp['__cum_pips'].iloc[-1]), 2)
+                if 'Profit_pips' in temp.columns:
+                    temp['__cum_pips'] = temp['Profit_pips'].cumsum()
+                    stats['pips_totaux'] = round(float(temp['__cum_pips'].iloc[-1]), 2) if len(temp) > 0 else 0.0
 
-            solde_initial = float(task_status.get(task_id, {}).get('solde_initial', 0) or 0)
-            stats['solde_final'] = round(solde_initial + stats['profit_compose'], 2) if solde_initial else round(stats['profit_compose'], 2)
-            stats['rendement_pct'] = round(((stats['solde_final'] - solde_initial) / solde_initial * 100) if solde_initial else 0, 2)
+                stats['solde_final'] = round(solde_initial + stats['profit_compose'], 2)
+                stats['rendement_pct'] = round(((stats['solde_final'] - solde_initial) / solde_initial * 100) if solde_initial > 0 else 0, 2)
 
-            equity = (solde_initial + temp['__cum_profit']) if solde_initial else temp['__cum_profit']
-            peak = equity.cummax()
-            dd = (peak - equity) / peak.replace(0, pd.NA) * 100
-            stats['drawdown_max'] = round(float(dd.max(skipna=True) or 0), 2)
+                equity = solde_initial + temp['__cum_profit']
+                peak = equity.cummax()
+                dd = (peak - equity) / peak.replace(0, pd.NA) * 100
+                stats['drawdown_max'] = round(float(dd.max(skipna=True) or 0), 2)
 
-            denom = stats['trades_gagnants'] + stats['trades_perdants']
-            stats['taux_reussite'] = round((stats['trades_gagnants'] / denom * 100) if denom else 0, 1)
-
-            # Série d'équity (incluant solde initial)
-            evolution = []
-            cumul = float(solde_initial)
-            for _, r in temp.iterrows():
-                cumul += float(r['Profit']) if pd.notna(r['Profit']) else 0.0
-                evolution.append({'date': r['__dt'].isoformat(), 'solde': round(cumul, 2)})
-            stats['evolution_somme_cumulee'] = evolution
+                # Série d'équity
+                evolution = []
+                cumul = float(solde_initial)
+                for _, r in temp.iterrows():
+                    cumul += float(r['Profit']) if pd.notna(r['Profit']) else 0.0
+                    evolution.append({'date': r['__dt'].isoformat(), 'solde': round(cumul, 2)})
+                stats['evolution_somme_cumulee'] = evolution
+            
+            # Recalcul du rendement avec le solde final
+            stats['rendement_pct'] = round(((stats['solde_final'] - solde_initial) / solde_initial * 100) if solde_initial > 0 else 0, 2)
         else:
             # dataset vide => forcer zéros partout
             stats.update({
@@ -367,6 +422,16 @@ def spa(path: str):
 def api_health():
     return jsonify({"status": "ok"})
 
+@app.route('/api/brokers')
+def api_brokers():
+    """Liste tous les brokers disponibles"""
+    try:
+        broker_manager = get_broker_manager()
+        brokers = broker_manager.list_available_brokers()
+        return jsonify({"success": True, "brokers": brokers})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
 @app.route('/api/analyze', methods=['POST'])
 def api_analyze():
     # délègue à la logique d'upload existante
@@ -384,6 +449,7 @@ def api_report(filename):
 def upload_files():
     """Gère l'upload des fichiers et lance l'analyse"""
     try:
+        import traceback
         # Vérifier les fichiers
         if 'files' not in request.files:
             return jsonify({'success': False, 'error': 'Aucun fichier sélectionné'})
@@ -406,6 +472,11 @@ def upload_files():
             multiplier = float(request.form.get('multiplier', 1))
         except ValueError:
             multiplier = 1
+        
+        # Récupérer le broker (optionnel)
+        broker = request.form.get('broker', '').strip()
+        if broker == '':
+            broker = None
         
         # Sauvegarder les fichiers
         file_paths = []
@@ -430,13 +501,14 @@ def upload_files():
             'success': None,
             'error': None,
             'solde_initial': solde_initial,
-            'multiplier': multiplier
+            'multiplier': multiplier,
+            'broker': broker
         }
         
         # Lancer le traitement en arrière-plan
         thread = threading.Thread(
             target=process_files_background,
-            args=(task_id, file_paths, filter_type, solde_initial, multiplier)
+            args=(task_id, file_paths, filter_type, solde_initial, multiplier, broker)
         )
         thread.daemon = True
         thread.start()
@@ -444,7 +516,17 @@ def upload_files():
         return jsonify({'success': True, 'task_id': task_id})
         
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)})
+        import traceback
+        error_trace = traceback.format_exc()
+        print(f"[ERROR] Erreur dans upload_files: {str(e)}")
+        print(f"[ERROR] Traceback: {error_trace}")
+        # Retourner les 500 premiers caractères du traceback pour éviter des réponses trop longues
+        error_msg = f'Erreur: {str(e)}'
+        if len(error_trace) > 500:
+            error_msg += f'\n\n{error_trace[:500]}...'
+        else:
+            error_msg += f'\n\n{error_trace}'
+        return jsonify({'success': False, 'error': error_msg}), 500
 
 @app.route('/status/<task_id>')
 def get_status(task_id):
@@ -480,9 +562,9 @@ if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     debug_mode = os.environ.get('FLASK_ENV', 'development') == 'development'
     
-    print("🚀 Lancement de l'application web Trading Analyzer...")
-    print(f"📊 Interface disponible sur le port: {port}")
-    print("💾 Rapports sauvegardés dans:", REPORTS_FOLDER)
-    print("📁 Fichiers temporaires dans:", UPLOAD_FOLDER)
+    print("Lancement de l'application web Trading Analyzer...")
+    print(f"Interface disponible sur le port: {port}")
+    print("Rapports sauvegardes dans:", REPORTS_FOLDER)
+    print("Fichiers temporaires dans:", UPLOAD_FOLDER)
     
     app.run(debug=debug_mode, host='0.0.0.0', port=port)
