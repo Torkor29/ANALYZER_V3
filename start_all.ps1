@@ -27,3 +27,4 @@ Write-Host "Frontend: http://localhost:5173" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "Fermez les fenêtres PowerShell pour arrêter les serveurs" -ForegroundColor Yellow
 
+

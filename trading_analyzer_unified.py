@@ -717,15 +717,16 @@ class TradingAnalyzer:
                 symbole_debug = row.get("Symbole_ordre", "unknown")
                 print(f"[DEBUG] Recalcul profit {symbole_debug}: IN={prix_in}, OUT={prix_out}, Type={type_ordre}, Volume_base={volume_base}, Volume_effectif={volume}")
                 
-                # Calcul de la différence de prix selon le type d'ordre
-                if type_ordre == "buy":
-                    difference_prix = prix_out - prix_in
-                else:  # sell
-                    difference_prix = prix_in - prix_out
+                # Calcul de la direction : +1 pour BUY, -1 pour SELL
+                direction = 1 if type_ordre == "buy" else -1
+                
+                # Calcul de la différence de prix avec direction
+                price_diff = (prix_out - prix_in) * direction
                 
                 # Calcul du profit selon le type d'instrument
                 if type_instrument == InstrumentType.FOREX:
-                    # FOREX : Profit = (différence_prix / taille_pip) × volume × valeur_par_pip
+                    # FOREX : Profit = pips × pip_value × Volume
+                    # pip_value prend déjà en compte ContractSize (100000) et conversion devise
                     # Essayer d'utiliser les valeurs réelles du broker si disponible
                     if self.broker_manager and self.broker:
                         broker_pip_size = self.broker_manager.get_pip_size(self.broker, symbole)
@@ -782,9 +783,9 @@ class TradingAnalyzer:
                         else:
                             valeur_par_pip = volume * 10.0
                     
-                    # Calcul des pips
-                    pips = abs(difference_prix) / pip_size
-                    signe = 1 if difference_prix >= 0 else -1
+                    # Calcul des pips avec price_diff (qui inclut déjà la direction)
+                    pips = abs(price_diff) / pip_size
+                    signe = 1 if price_diff >= 0 else -1
                     pips_entiers = signe * int(pips)
                     
                     profit = pips_entiers * valeur_par_pip
@@ -792,93 +793,113 @@ class TradingAnalyzer:
                     return round(profit, 2)
                 
                 elif type_instrument == InstrumentType.METAUX:
-                    # MÉTAUX (Or, Argent) : Profit = différence_prix × volume × valeur_par_point
-                    # Essayer d'utiliser les valeurs réelles du broker si disponible
+                    # MÉTAUX (Or, Argent) : Profit = price_diff × ContractSize × Volume
+                    # Formule correcte : 1 lot = ContractSize unités (ex: 100 oz pour GOLD)
                     if self.broker_manager and self.broker:
-                        broker_pip_value = self.broker_manager.get_pip_value(self.broker, symbole, 'USD')
-                        if broker_pip_value is not None:
-                            # La valeur pip du broker est pour 1 lot, on doit l'ajuster au volume
-                            valeur_par_point = broker_pip_value * (volume / 1.0)
+                        contract_size = self.broker_manager.get_contract_size(self.broker, symbole)
+                        if contract_size is not None:
+                            # Utiliser ContractSize du broker
+                            profit = price_diff * contract_size * volume
+                            print(f"[DEBUG] Profit Métaux {symbole_debug}: {price_diff} × {contract_size} × {volume} = {profit}USD (broker: {self.broker})")
                         else:
-                            # Fallback sur les valeurs par défaut
-                            if "gold" in symbole or "xau" in symbole or "or" in symbole:
-                                valeur_par_point = volume * 1.0  # 1 USD par 0.1 lot
-                            else:  # Argent
-                                valeur_par_point = volume * 0.5  # 0.5 USD par 0.1 lot
+                            # Fallback : ContractSize par défaut pour métaux
+                            # GOLD standard : 1 lot = 100 oz
+                            contract_size_default = 100.0 if ("gold" in symbole or "xau" in symbole or "or" in symbole) else 5000.0  # Argent : 5000 oz
+                            profit = price_diff * contract_size_default * volume
+                            print(f"[DEBUG] Profit Métaux {symbole_debug} (fallback): {price_diff} × {contract_size_default} × {volume} = {profit}USD")
                     else:
-                        # Pas de broker : utiliser les valeurs par défaut
-                        if "gold" in symbole or "xau" in symbole or "or" in symbole:
-                            valeur_par_point = volume * 1.0  # 1 USD par 0.1 lot
-                        else:  # Argent
-                            valeur_par_point = volume * 0.5  # 0.5 USD par 0.1 lot
+                        # Pas de broker : utiliser ContractSize par défaut
+                        contract_size_default = 100.0 if ("gold" in symbole or "xau" in symbole or "or" in symbole) else 5000.0
+                        profit = price_diff * contract_size_default * volume
+                        print(f"[DEBUG] Profit Métaux {symbole_debug} (sans broker): {price_diff} × {contract_size_default} × {volume} = {profit}USD")
                     
-                    profit = difference_prix * valeur_par_point
                     return round(profit, 2)
                 
                 elif type_instrument == InstrumentType.INDICES:
-                    # INDICES : Profit = différence_prix × volume × valeur_par_point
-                    # Essayer d'utiliser les valeurs réelles du broker si disponible
+                    # INDICES : Profit = price_diff × PointValue_par_point × Volume
+                    # Pour les indices, PointValue est souvent 1 USD/point/lot, mais peut varier
                     if self.broker_manager and self.broker:
+                        # Essayer d'utiliser pip_value comme PointValue (valeur par point)
                         broker_pip_value = self.broker_manager.get_pip_value(self.broker, symbole, 'USD')
                         if broker_pip_value is not None:
-                            # La valeur pip du broker est pour 1 lot, on doit l'ajuster au volume
-                            valeur_par_point = broker_pip_value * (volume / 1.0)
+                            # pip_value est la valeur d'un point pour 1 lot
+                            point_value = broker_pip_value
+                            profit = price_diff * point_value * volume
+                            print(f"[DEBUG] Profit Indices {symbole_debug}: {price_diff} points × {point_value}USD/point × {volume} lots = {profit}USD (broker: {self.broker})")
                         else:
-                            # Fallback sur les valeurs par défaut
-                            if "uk100" in symbole or "uk" in symbole:
-                                valeur_par_point = volume * 1.17
-                            else:
-                                valeur_par_point = volume * 1.0
+                            # Fallback : PointValue par défaut (1 USD/point/lot généralement)
+                            point_value_default = 1.17 if ("uk100" in symbole or "uk" in symbole) else 1.0
+                            profit = price_diff * point_value_default * volume
+                            print(f"[DEBUG] Profit Indices {symbole_debug} (fallback): {price_diff} × {point_value_default} × {volume} = {profit}USD")
                     else:
-                        # Pas de broker : utiliser les valeurs par défaut
-                        if "uk100" in symbole or "uk" in symbole:
-                            valeur_par_point = volume * 1.17
-                        else:
-                            valeur_par_point = volume * 1.0
-                    profit = difference_prix * valeur_par_point
-                    print(f"[DEBUG] Profit calculé pour {symbole_debug}: {difference_prix} points × {valeur_par_point}USD/point = {profit}USD (broker: {self.broker if self.broker else 'défaut'})")
+                        # Pas de broker : PointValue par défaut
+                        point_value_default = 1.17 if ("uk100" in symbole or "uk" in symbole) else 1.0
+                        profit = price_diff * point_value_default * volume
+                        print(f"[DEBUG] Profit Indices {symbole_debug} (sans broker): {price_diff} × {point_value_default} × {volume} = {profit}USD")
+                    
                     return round(profit, 2)
                 
                 elif type_instrument == InstrumentType.ENERGIE:
-                    # ÉNERGIE (Pétrole) : Profit = différence_prix × volume × valeur_par_point
-                    # Essayer d'utiliser les valeurs réelles du broker si disponible
+                    # ÉNERGIE (Pétrole) : Profit = price_diff × ContractSize × Volume
+                    # Pour le pétrole, ContractSize est généralement 100 barils par lot
                     if self.broker_manager and self.broker:
-                        broker_pip_value = self.broker_manager.get_pip_value(self.broker, symbole, 'USD')
-                        if broker_pip_value is not None:
-                            valeur_par_point = broker_pip_value * (volume / 1.0)
+                        contract_size = self.broker_manager.get_contract_size(self.broker, symbole)
+                        if contract_size is not None:
+                            profit = price_diff * contract_size * volume
+                            print(f"[DEBUG] Profit Énergie {symbole_debug}: {price_diff} × {contract_size} × {volume} = {profit}USD (broker: {self.broker})")
                         else:
-                            valeur_par_point = volume * 1.0
+                            # Fallback : 100 barils par lot (standard)
+                            contract_size_default = 100.0
+                            profit = price_diff * contract_size_default * volume
+                            print(f"[DEBUG] Profit Énergie {symbole_debug} (fallback): {price_diff} × {contract_size_default} × {volume} = {profit}USD")
                     else:
-                        valeur_par_point = volume * 1.0
-                    profit = difference_prix * valeur_par_point
+                        # Pas de broker : ContractSize par défaut (100 barils)
+                        contract_size_default = 100.0
+                        profit = price_diff * contract_size_default * volume
+                        print(f"[DEBUG] Profit Énergie {symbole_debug} (sans broker): {price_diff} × {contract_size_default} × {volume} = {profit}USD")
+                    
                     return round(profit, 2)
                 
                 elif type_instrument == InstrumentType.CRYPTO:
-                    # CRYPTO : Profit = différence_prix × volume × valeur_par_point
-                    # Essayer d'utiliser les valeurs réelles du broker si disponible
+                    # CRYPTO : Profit = price_diff × ContractSize × Volume
+                    # ContractSize = nombre de coins par lot (ex: 1 BTC par lot, ou 10 selon le broker)
                     if self.broker_manager and self.broker:
-                        broker_pip_value = self.broker_manager.get_pip_value(self.broker, symbole, 'USD')
-                        if broker_pip_value is not None:
-                            valeur_par_point = broker_pip_value * (volume / 1.0)
+                        contract_size = self.broker_manager.get_contract_size(self.broker, symbole)
+                        if contract_size is not None:
+                            profit = price_diff * contract_size * volume
+                            print(f"[DEBUG] Profit Crypto {symbole_debug}: {price_diff} × {contract_size} × {volume} = {profit}USD (broker: {self.broker})")
                         else:
-                            valeur_par_point = volume * 0.1
+                            # Fallback : ContractSize par défaut (1 coin par lot généralement)
+                            contract_size_default = 1.0
+                            profit = price_diff * contract_size_default * volume
+                            print(f"[DEBUG] Profit Crypto {symbole_debug} (fallback): {price_diff} × {contract_size_default} × {volume} = {profit}USD")
                     else:
-                        valeur_par_point = volume * 0.1
-                    profit = difference_prix * valeur_par_point
+                        # Pas de broker : ContractSize par défaut (1 coin)
+                        contract_size_default = 1.0
+                        profit = price_diff * contract_size_default * volume
+                        print(f"[DEBUG] Profit Crypto {symbole_debug} (sans broker): {price_diff} × {contract_size_default} × {volume} = {profit}USD")
+                    
                     return round(profit, 2)
                 
                 else:
-                    # ACTIONS et autres : Profit = différence_prix × volume × valeur_par_point
-                    # Essayer d'utiliser les valeurs réelles du broker si disponible
+                    # ACTIONS et autres : Profit = price_diff × ContractSize × Volume
+                    # ContractSize = nombre d'actions par lot (généralement 1 ou 10)
                     if self.broker_manager and self.broker:
-                        broker_pip_value = self.broker_manager.get_pip_value(self.broker, symbole, 'USD')
-                        if broker_pip_value is not None:
-                            valeur_par_point = broker_pip_value * (volume / 1.0)
+                        contract_size = self.broker_manager.get_contract_size(self.broker, symbole)
+                        if contract_size is not None:
+                            profit = price_diff * contract_size * volume
+                            print(f"[DEBUG] Profit Actions/Autres {symbole_debug}: {price_diff} × {contract_size} × {volume} = {profit}USD (broker: {self.broker})")
                         else:
-                            valeur_par_point = volume * 1.0
+                            # Fallback : ContractSize par défaut (1 action par lot)
+                            contract_size_default = 1.0
+                            profit = price_diff * contract_size_default * volume
+                            print(f"[DEBUG] Profit Actions/Autres {symbole_debug} (fallback): {price_diff} × {contract_size_default} × {volume} = {profit}USD")
                     else:
-                        valeur_par_point = volume * 1.0
-                    profit = difference_prix * valeur_par_point
+                        # Pas de broker : ContractSize par défaut (1 action)
+                        contract_size_default = 1.0
+                        profit = price_diff * contract_size_default * volume
+                        print(f"[DEBUG] Profit Actions/Autres {symbole_debug} (sans broker): {price_diff} × {contract_size_default} × {volume} = {profit}USD")
+                    
                     return round(profit, 2)
             
             # Si pas de matching ou trade d'entrée, retourner None (garder profit Excel)

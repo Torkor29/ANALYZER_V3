@@ -204,3 +204,5 @@ Profit USD = (entry - exit) × Volume × 0.1
 4. **Volume** : Les formules supposent que le volume est en lots (0.1 lot = 0.1)
 
 
+
+
